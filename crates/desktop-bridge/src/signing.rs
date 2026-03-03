@@ -4,8 +4,11 @@
 //! `packages/remote-web/src/shared/lib/relay/signing.ts`.
 
 use anyhow::Context as _;
-use base64::{Engine as _, engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD}};
-use ed25519_dalek::{SigningKey, Signer};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
+};
+use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha256};
 
 const SIGNING_SESSION_PARAM: &str = "x-vk-sig-session";
@@ -22,10 +25,7 @@ pub struct SigningContext {
 
 impl SigningContext {
     /// Parse from a JWK private key (Ed25519, OKP curve).
-    pub fn from_jwk(
-        signing_session_id: String,
-        jwk: &serde_json::Value,
-    ) -> anyhow::Result<Self> {
+    pub fn from_jwk(signing_session_id: String, jwk: &serde_json::Value) -> anyhow::Result<Self> {
         let d = jwk
             .get("d")
             .and_then(|v| v.as_str())
@@ -35,9 +35,9 @@ impl SigningContext {
             .decode(d)
             .context("Failed to decode JWK 'd' field")?;
 
-        let key_array: [u8; 32] = key_bytes
-            .try_into()
-            .map_err(|v: Vec<u8>| anyhow::anyhow!("Ed25519 key must be 32 bytes, got {}", v.len()))?;
+        let key_array: [u8; 32] = key_bytes.try_into().map_err(|v: Vec<u8>| {
+            anyhow::anyhow!("Ed25519 key must be 32 bytes, got {}", v.len())
+        })?;
 
         let signing_key = SigningKey::from_bytes(&key_array);
 
@@ -66,7 +66,11 @@ pub fn sign_path(ctx: &SigningContext, method: &str, path_and_query: &str) -> St
     let signature = ctx.signing_key.sign(message.as_bytes());
     let signature_b64 = BASE64_STANDARD.encode(signature.to_bytes());
 
-    let separator = if path_and_query.contains('?') { '&' } else { '?' };
+    let separator = if path_and_query.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
 
     format!(
         "{path_and_query}{separator}{SIGNING_SESSION_PARAM}={session}&{TIMESTAMP_PARAM}={timestamp}&{NONCE_PARAM}={nonce}&{SIGNATURE_PARAM}={sig}",

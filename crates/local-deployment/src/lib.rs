@@ -27,7 +27,10 @@ use services::services::{
 use tokio::sync::RwLock;
 use trusted_key_auth::runtime::TrustedKeyAuthRuntime;
 use utils::{
-    assets::{config_path, credentials_path, server_signing_key_path, trusted_keys_path},
+    assets::{
+        config_path, credentials_path, server_signing_key_path, ssh_host_key_path,
+        trusted_keys_path,
+    },
     msg_store::MsgStore,
 };
 use uuid::Uuid;
@@ -64,6 +67,7 @@ pub struct LocalDeployment {
     relay_signing: RelaySigningService,
     relay_control: Arc<RelayControl>,
     server_info: Arc<ServerInfo>,
+    ssh_config: Arc<russh::server::Config>,
     pty: PtyService,
 }
 
@@ -182,6 +186,10 @@ impl Deployment for LocalDeployment {
         let relay_control = Arc::new(RelayControl::new());
         let server_info = Arc::new(ServerInfo::new());
 
+        let ssh_host_key = embedded_ssh::host_key::load_or_generate(&ssh_host_key_path())
+            .expect("Failed to load or generate SSH host key");
+        let ssh_config = embedded_ssh::config::build_config(ssh_host_key);
+
         // We need to make analytics accessible to the ContainerService
         // TODO: Handle this more gracefully
         let analytics_ctx = analytics.as_ref().map(|s| AnalyticsContext {
@@ -242,6 +250,7 @@ impl Deployment for LocalDeployment {
             relay_signing,
             relay_control,
             server_info,
+            ssh_config,
             pty,
         };
 
@@ -389,5 +398,9 @@ impl LocalDeployment {
 
     pub fn pty(&self) -> &PtyService {
         &self.pty
+    }
+
+    pub fn ssh_config(&self) -> &Arc<russh::server::Config> {
+        &self.ssh_config
     }
 }

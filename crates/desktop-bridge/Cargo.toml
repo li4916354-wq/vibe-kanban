@@ -14,7 +14,9 @@ axum = { version = "0.8.4", features = ["ws"] }
 base64 = "0.22"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
+dirs = "5"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
+ssh-key = { version = "0.6", features = ["ed25519"] }
 futures-util = "0.3"
 http = "1"
 hyper-util = { version = "0.1", features = ["tokio"] }

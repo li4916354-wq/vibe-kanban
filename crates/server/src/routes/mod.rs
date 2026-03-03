@@ -26,6 +26,7 @@ pub mod repo;
 pub mod scratch;
 pub mod search;
 pub mod sessions;
+pub mod ssh_session;
 pub mod tags;
 pub mod task_attempts;
 pub mod terminal;
@@ -51,6 +52,7 @@ pub fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(sessions::router(&deployment))
         .merge(terminal::router())
         .route("/tunnel", get(tunnel::tunnel_ws))
+        .route("/ssh-session", get(ssh_session::ssh_session_ws))
         .nest("/remote", remote::router())
         .nest("/images", images::routes())
         .layer(axum::middleware::from_fn_with_state(

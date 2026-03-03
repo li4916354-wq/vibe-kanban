@@ -8,7 +8,9 @@ api-types = { path = "../api-types" }
 db = { path = "../db" }
 executors = { path="../executors" }
 deployment = { path = "../deployment" }
+embedded-ssh = { path = "../embedded-ssh" }
 relay-control = { path = "../relay-control" }
+russh = "0.48"
 server-info = { path = "../server-info" }
 services = { path = "../services" }
 worktree-manager = { path = "../worktree-manager" }

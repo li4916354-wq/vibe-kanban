@@ -1,3 +1,4 @@
+mod signing;
 mod tunnel;
 
 use std::sync::Arc;
@@ -11,45 +12,40 @@ use axum::{
 };
 use clap::Parser;
 use serde::Deserialize;
-use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 
-use crate::tunnel::TunnelManager;
+use crate::{signing::SigningContext, tunnel::TunnelManager};
 
 #[derive(Parser)]
 #[command(name = "desktop-bridge", about = "Local bridge for remote IDE opening via relay tunnel")]
 struct Cli {
-    /// Relay API base URL (e.g. https://relay.example.com)
-    #[arg(long, env = "RELAY_URL")]
-    relay_url: String,
-
-    /// Bearer token for relay authentication
-    #[arg(long, env = "RELAY_TOKEN")]
-    token: String,
-
     /// Local HTTP API port
     #[arg(long, default_value = "15147", env = "BRIDGE_PORT")]
     port: u16,
 }
 
 struct AppState {
-    tunnel_manager: Mutex<TunnelManager>,
+    tunnel_manager: TunnelManager,
 }
 
 #[derive(Deserialize)]
 struct OpenRemoteEditorRequest {
-    host_id: uuid::Uuid,
     workspace_path: String,
     #[serde(default)]
     editor_type: Option<String>,
     #[serde(default = "default_ssh_port")]
     ssh_port: u16,
+    /// Relay proxy session URL (e.g. https://relay.example.com/relay/h/{host_id}/s/{session_id})
+    relay_session_base_url: String,
+    /// Ed25519 signing session ID
+    signing_session_id: String,
+    /// Ed25519 private key in JWK format
+    private_key_jwk: serde_json::Value,
 }
 
 fn default_ssh_port() -> u16 {
     22
 }
-
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -63,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     let state = Arc::new(AppState {
-        tunnel_manager: Mutex::new(TunnelManager::new(cli.relay_url, cli.token)),
+        tunnel_manager: TunnelManager::new(),
     });
 
     let app = Router::new()
@@ -88,11 +84,23 @@ async fn open_remote_editor(
     State(state): State<Arc<AppState>>,
     Json(req): Json<OpenRemoteEditorRequest>,
 ) -> impl IntoResponse {
+    let signing_ctx = match SigningContext::from_jwk(
+        req.signing_session_id,
+        &req.private_key_jwk,
+    ) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            tracing::error!(?e, "Invalid signing context");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
     let local_port = match state
         .tunnel_manager
-        .lock()
-        .await
-        .get_or_create_tunnel(req.host_id, req.ssh_port)
+        .get_or_create_tunnel(&req.relay_session_base_url, &signing_ctx, req.ssh_port)
         .await
     {
         Ok(port) => port,
@@ -123,5 +131,8 @@ async fn open_remote_editor(
         }
     };
 
-    (StatusCode::OK, Json(serde_json::json!({ "url": url, "local_port": local_port })))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "url": url, "local_port": local_port })),
+    )
 }

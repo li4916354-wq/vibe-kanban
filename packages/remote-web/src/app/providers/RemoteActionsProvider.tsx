@@ -32,6 +32,7 @@ import {
 import { REMOTE_SETTINGS_SECTIONS } from "@remote/shared/constants/settings";
 import { attemptsApi } from "@/shared/lib/api";
 import { openRemoteEditor } from "@remote/shared/lib/desktopBridge";
+import { resolveRelayHostContext } from "@remote/shared/lib/relay/context";
 
 interface RemoteActionsProviderProps {
   children: ReactNode;
@@ -173,11 +174,15 @@ export function RemoteActionsProvider({
       if (action.id === "open-in-ide") {
         if (!workspaceId || !hostId) return;
         try {
-          const { workspace_path } =
-            await attemptsApi.getEditorPath(workspaceId);
+          const [{ workspace_path }, relayCtx] = await Promise.all([
+            attemptsApi.getEditorPath(workspaceId),
+            resolveRelayHostContext(hostId),
+          ]);
           const url = await openRemoteEditor({
-            host_id: hostId,
             workspace_path,
+            relay_session_base_url: relayCtx.relaySessionBaseUrl,
+            signing_session_id: relayCtx.pairedHost.signing_session_id!,
+            private_key_jwk: relayCtx.pairedHost.private_key_jwk,
           });
           if (url) {
             window.open(url, "_blank");

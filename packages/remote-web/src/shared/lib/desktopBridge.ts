@@ -19,10 +19,15 @@ function getBridgeUrl(): string {
 }
 
 export interface OpenRemoteEditorRequest {
-  host_id: string;
   workspace_path: string;
   editor_type?: string;
   ssh_port?: number;
+  /** Relay proxy session URL (e.g. https://relay.example.com/relay/h/{host_id}/s/{session_id}) */
+  relay_session_base_url: string;
+  /** Ed25519 signing session ID */
+  signing_session_id: string;
+  /** Ed25519 private key in JWK format */
+  private_key_jwk: JsonWebKey;
 }
 
 export async function openRemoteEditor(

@@ -29,6 +29,7 @@ pub mod sessions;
 pub mod tags;
 pub mod task_attempts;
 pub mod terminal;
+pub mod tunnel;
 
 pub fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
     let relay_signed_routes = Router::new()
@@ -49,6 +50,7 @@ pub fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(migration::router())
         .merge(sessions::router(&deployment))
         .merge(terminal::router())
+        .route("/tunnel", get(tunnel::tunnel_ws))
         .nest("/remote", remote::router())
         .nest("/images", images::routes())
         .layer(axum::middleware::from_fn_with_state(

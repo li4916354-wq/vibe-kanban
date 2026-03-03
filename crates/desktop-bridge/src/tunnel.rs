@@ -1,7 +1,7 @@
 //! TCP port tunnel manager.
 //!
 //! Creates local TCP listeners that tunnel to remote relay hosts via WebSocket.
-//! Each tunnel bridges `localhost:{local_port}` → WS → relay → `host:localhost:{remote_port}`.
+//! Each tunnel bridges `localhost:{local_port}` → WS → relay proxy → host backend → `localhost:{remote_port}`.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -13,10 +13,12 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::signing::SigningContext;
+
 /// Key for deduplicating tunnels.
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 struct TunnelKey {
-    host_id: uuid::Uuid,
+    relay_session_base_url: String,
     port: u16,
 }
 
@@ -25,33 +27,29 @@ struct ActiveTunnel {
     cancel: CancellationToken,
 }
 
+#[derive(Default)]
 pub struct TunnelManager {
-    relay_url: String,
-    bearer_token: String,
     tunnels: Arc<Mutex<HashMap<TunnelKey, ActiveTunnel>>>,
 }
 
 impl TunnelManager {
-    pub fn new(relay_url: String, bearer_token: String) -> Self {
-        Self {
-            relay_url,
-            bearer_token,
-            tunnels: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    pub fn update_token(&mut self, token: String) {
-        self.bearer_token = token;
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Get or create a tunnel to `localhost:{port}` on the given relay host.
+    /// Routes through the relay proxy with Ed25519 signed WS handshake.
     /// Returns the local port to connect to.
     pub async fn get_or_create_tunnel(
         &self,
-        host_id: uuid::Uuid,
+        relay_session_base_url: &str,
+        signing_ctx: &SigningContext,
         port: u16,
     ) -> anyhow::Result<u16> {
-        let key = TunnelKey { host_id, port };
+        let key = TunnelKey {
+            relay_session_base_url: relay_session_base_url.to_string(),
+            port,
+        };
 
         // Check for existing healthy tunnel
         {
@@ -71,14 +69,20 @@ impl TunnelManager {
 
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
-        let relay_url = self.relay_url.clone();
-        let bearer_token = self.bearer_token.clone();
+        let relay_session_base_url = relay_session_base_url.to_string();
+        let signing_ctx = signing_ctx.clone();
         let tunnels = self.tunnels.clone();
         let key_clone = key.clone();
 
         tokio::spawn(async move {
-            run_tunnel_listener(listener, &relay_url, &bearer_token, host_id, port, cancel_clone)
-                .await;
+            run_tunnel_listener(
+                listener,
+                &relay_session_base_url,
+                &signing_ctx,
+                port,
+                cancel_clone,
+            )
+            .await;
 
             // Clean up on exit
             tunnels.lock().await.remove(&key_clone);
@@ -92,7 +96,7 @@ impl TunnelManager {
             },
         );
 
-        tracing::info!(%host_id, remote_port = port, local_port, "Tunnel created");
+        tracing::info!(remote_port = port, local_port, "Tunnel created");
 
         Ok(local_port)
     }
@@ -100,9 +104,8 @@ impl TunnelManager {
 
 async fn run_tunnel_listener(
     listener: TcpListener,
-    relay_url: &str,
-    bearer_token: &str,
-    host_id: uuid::Uuid,
+    relay_session_base_url: &str,
+    signing_ctx: &SigningContext,
     port: u16,
     cancel: CancellationToken,
 ) {
@@ -112,11 +115,11 @@ async fn run_tunnel_listener(
             result = listener.accept() => {
                 match result {
                     Ok((tcp_stream, _addr)) => {
-                        let relay_url = relay_url.to_string();
-                        let bearer_token = bearer_token.to_string();
+                        let relay_session_base_url = relay_session_base_url.to_string();
+                        let signing_ctx = signing_ctx.clone();
                         tokio::spawn(async move {
                             if let Err(error) = bridge_tcp_to_relay(
-                                tcp_stream, &relay_url, &bearer_token, host_id, port,
+                                tcp_stream, &relay_session_base_url, &signing_ctx, port,
                             ).await {
                                 tracing::warn!(?error, "Tunnel bridge failed");
                             }
@@ -132,26 +135,18 @@ async fn run_tunnel_listener(
     }
 }
 
-/// Bridge a single TCP connection to the relay tunnel WebSocket.
+/// Bridge a single TCP connection to the relay via signed WebSocket.
 async fn bridge_tcp_to_relay(
     mut tcp_stream: tokio::net::TcpStream,
-    relay_url: &str,
-    bearer_token: &str,
-    host_id: uuid::Uuid,
+    relay_session_base_url: &str,
+    signing_ctx: &SigningContext,
     port: u16,
 ) -> anyhow::Result<()> {
-    let ws_url = build_tunnel_ws_url(relay_url, host_id, port)?;
+    let ws_url = build_signed_tunnel_ws_url(relay_session_base_url, signing_ctx, port)?;
 
-    let mut request = ws_url
+    let request = ws_url
         .into_client_request()
         .context("Failed to build WS request")?;
-
-    request.headers_mut().insert(
-        "Authorization",
-        format!("Bearer {bearer_token}")
-            .parse()
-            .context("Invalid auth header")?,
-    );
 
     let mut tls_builder = native_tls::TlsConnector::builder();
     if cfg!(debug_assertions) {
@@ -177,27 +172,36 @@ async fn bridge_tcp_to_relay(
     Ok(())
 }
 
-fn build_tunnel_ws_url(
-    relay_url: &str,
-    host_id: uuid::Uuid,
+/// Build the signed WebSocket URL through the relay proxy path.
+///
+/// The relay session base URL is like:
+///   `https://relay.example.com/relay/h/{host_id}/s/{session_id}`
+///
+/// We append `/api/tunnel?port={port}` and sign the path with Ed25519.
+fn build_signed_tunnel_ws_url(
+    relay_session_base_url: &str,
+    signing_ctx: &SigningContext,
     port: u16,
 ) -> anyhow::Result<String> {
-    let base = relay_url.trim_end_matches('/');
+    let base = relay_session_base_url.trim_end_matches('/');
 
-    let path = format!("/v1/relay/hosts/{host_id}/tunnel?port={port}");
+    // The path that gets signed and verified by the host backend
+    let api_path = format!("/api/tunnel?port={port}");
+    let signed_path = crate::signing::sign_path(signing_ctx, "GET", &api_path);
 
     if let Some(rest) = base.strip_prefix("https://") {
-        Ok(format!("wss://{rest}{path}"))
+        Ok(format!("wss://{rest}{signed_path}"))
     } else if let Some(rest) = base.strip_prefix("http://") {
-        Ok(format!("ws://{rest}{path}"))
+        Ok(format!("ws://{rest}{signed_path}"))
     } else {
-        anyhow::bail!("Unexpected relay URL scheme: {base}")
+        anyhow::bail!("Unexpected relay session URL scheme: {base}")
     }
 }
 
 // ------- Minimal WebSocket → AsyncRead/AsyncWrite adapter -------
 
 use std::{io, pin::Pin, task::Poll};
+
 use futures_util::{Sink, Stream};
 use tokio::io::ReadBuf;
 

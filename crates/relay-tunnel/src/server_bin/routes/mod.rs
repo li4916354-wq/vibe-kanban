@@ -1,6 +1,7 @@
 mod auth_code;
 pub mod connect;
 pub mod path_routes;
+mod tunnel;
 
 use axum::{
     Router,
@@ -23,6 +24,10 @@ pub fn build_router(state: RelayAppState) -> Router {
         .route(
             "/relay/sessions/{session_id}/auth-code",
             post(auth_code::relay_session_auth_code),
+        )
+        .route(
+            "/relay/hosts/{host_id}/tunnel",
+            get(tunnel::relay_tunnel),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

@@ -122,6 +122,60 @@ pub async fn proxy_request_over_control(
     Response::from_parts(parts, Body::new(body))
 }
 
+/// Opens a CONNECT tunnel to a target address through the relay host's yamux session.
+///
+/// Returns an `AsyncRead + AsyncWrite` handle that is the raw byte stream to the
+/// target. The caller is responsible for bridging this to a WebSocket or other transport.
+pub async fn open_connect_tunnel(
+    control: &Mutex<Control>,
+    target_addr: &str,
+) -> anyhow::Result<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> {
+    let stream = {
+        let mut control = control.lock().await;
+        control
+            .open_stream()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to open yamux stream: {e}"))?
+    };
+
+    let (mut sender, connection) = client_http1::Builder::new()
+        .handshake(TokioIo::new(stream))
+        .await
+        .map_err(|e| anyhow::anyhow!("CONNECT handshake failed: {e}"))?;
+
+    tokio::spawn(async move {
+        if let Err(error) = connection.with_upgrades().await {
+            tracing::debug!(?error, "CONNECT tunnel connection closed");
+        }
+    });
+
+    let mut connect_req = hyper::Request::builder()
+        .method(hyper::Method::CONNECT)
+        .uri(target_addr)
+        .body(axum::body::Body::empty())
+        .map_err(|e| anyhow::anyhow!("failed to build CONNECT request: {e}"))?;
+
+    let request_upgrade = upgrade::on(&mut connect_req);
+
+    let response = sender
+        .send_request(connect_req)
+        .await
+        .map_err(|e| anyhow::anyhow!("CONNECT request failed: {e}"))?;
+
+    if response.status() != StatusCode::OK {
+        anyhow::bail!(
+            "CONNECT tunnel rejected with status {}",
+            response.status()
+        );
+    }
+
+    let upgraded = request_upgrade
+        .await
+        .map_err(|e| anyhow::anyhow!("CONNECT upgrade failed: {e}"))?;
+
+    Ok(TokioIo::new(upgraded))
+}
+
 fn normalized_relay_path(uri: &axum::http::Uri, strip_prefix: &str) -> String {
     let raw_path = uri.path();
     let path = raw_path.strip_prefix(strip_prefix).unwrap_or(raw_path);

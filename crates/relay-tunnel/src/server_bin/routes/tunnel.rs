@@ -14,8 +14,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::super::{auth::RequestContext, db::hosts::HostRepository, state::RelayAppState};
-use crate::server::open_connect_tunnel;
-use crate::ws_io::{WsIoReadMessage, WsMessageStreamIo};
+use crate::{
+    server::open_connect_tunnel,
+    ws_io::{WsIoReadMessage, WsMessageStreamIo},
+};
 
 #[derive(Debug, Deserialize)]
 pub struct TunnelQuery {

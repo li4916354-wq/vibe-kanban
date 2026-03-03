@@ -163,10 +163,7 @@ pub async fn open_connect_tunnel(
         .map_err(|e| anyhow::anyhow!("CONNECT request failed: {e}"))?;
 
     if response.status() != StatusCode::OK {
-        anyhow::bail!(
-            "CONNECT tunnel rejected with status {}",
-            response.status()
-        );
+        anyhow::bail!("CONNECT tunnel rejected with status {}", response.status());
     }
 
     let upgraded = request_upgrade

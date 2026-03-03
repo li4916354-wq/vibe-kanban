@@ -451,6 +451,15 @@ export const attemptsApi = {
     return handleApiResponse<OpenEditorResponse>(response);
   },
 
+  getEditorPath: async (
+    attemptId: string
+  ): Promise<{ workspace_path: string }> => {
+    const response = await makeRequest(
+      `/api/task-attempts/${attemptId}/editor-path`
+    );
+    return handleApiResponse<{ workspace_path: string }>(response);
+  },
+
   getBranchStatus: async (attemptId: string): Promise<RepoBranchStatus[]> => {
     const response = await makeRequest(
       `/api/task-attempts/${attemptId}/branch-status`

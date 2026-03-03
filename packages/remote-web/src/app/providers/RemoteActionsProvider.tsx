@@ -30,6 +30,8 @@ import {
   type ProjectIssueCreateOptions,
 } from "@/shared/stores/useKanbanIssueComposerStore";
 import { REMOTE_SETTINGS_SECTIONS } from "@remote/shared/constants/settings";
+import { attemptsApi } from "@/shared/lib/api";
+import { openRemoteEditor } from "@remote/shared/lib/desktopBridge";
 
 interface RemoteActionsProviderProps {
   children: ReactNode;
@@ -44,7 +46,7 @@ export function RemoteActionsProvider({
 }: RemoteActionsProviderProps) {
   const appNavigation = useAppNavigation();
   const queryClient = useQueryClient();
-  const { projectId, hostId } = useParams({ strict: false });
+  const { projectId, hostId, workspaceId } = useParams({ strict: false });
   const userCtx = useContext(UserContext);
   const selectedOrgId = useOrganizationStore((s) => s.selectedOrgId);
   const [defaultCreateStatusId, setDefaultCreateStatusId] = useState<
@@ -104,7 +106,7 @@ export function RemoteActionsProvider({
         noOpSelection("Workspace actions");
       },
       activeWorkspaces: [],
-      currentWorkspaceId: null,
+      currentWorkspaceId: workspaceId ?? null,
       containerRef: null,
       runningDevServers: [],
       startDevServer: () => {
@@ -142,6 +144,7 @@ export function RemoteActionsProvider({
       projectId,
       projectMutations,
       userCtx?.workspaces,
+      workspaceId,
     ],
   );
 
@@ -167,11 +170,29 @@ export function RemoteActionsProvider({
         return;
       }
 
+      if (action.id === "open-in-ide") {
+        if (!workspaceId || !hostId) return;
+        try {
+          const { workspace_path } =
+            await attemptsApi.getEditorPath(workspaceId);
+          const url = await openRemoteEditor({
+            host_id: hostId,
+            workspace_path,
+          });
+          if (url) {
+            window.open(url, "_blank");
+          }
+        } catch (err) {
+          console.error("[RemoteActionsProvider] Open in IDE failed:", err);
+        }
+        return;
+      }
+
       console.warn(
         `[RemoteActionsProvider] Action "${action.id}" is unavailable in remote web.`,
       );
     },
-    [projectId, selectedOrgId],
+    [projectId, selectedOrgId, workspaceId, hostId],
   );
 
   const getLabel = useCallback(

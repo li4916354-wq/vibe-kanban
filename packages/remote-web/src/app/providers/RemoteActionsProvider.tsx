@@ -30,9 +30,6 @@ import {
   type ProjectIssueCreateOptions,
 } from "@/shared/stores/useKanbanIssueComposerStore";
 import { REMOTE_SETTINGS_SECTIONS } from "@remote/shared/constants/settings";
-import { attemptsApi } from "@/shared/lib/api";
-import { openRemoteEditor } from "@remote/shared/lib/desktopBridge";
-import { resolveRelayHostContext } from "@remote/shared/lib/relay/context";
 
 interface RemoteActionsProviderProps {
   children: ReactNode;
@@ -171,33 +168,11 @@ export function RemoteActionsProvider({
         return;
       }
 
-      if (action.id === "open-in-ide") {
-        if (!workspaceId || !hostId) return;
-        try {
-          const [{ workspace_path }, relayCtx] = await Promise.all([
-            attemptsApi.getEditorPath(workspaceId),
-            resolveRelayHostContext(hostId),
-          ]);
-          const url = await openRemoteEditor({
-            workspace_path,
-            relay_session_base_url: relayCtx.relaySessionBaseUrl,
-            signing_session_id: relayCtx.pairedHost.signing_session_id!,
-            private_key_jwk: relayCtx.pairedHost.private_key_jwk,
-          });
-          if (url) {
-            window.open(url, "_blank");
-          }
-        } catch (err) {
-          console.error("[RemoteActionsProvider] Open in IDE failed:", err);
-        }
-        return;
-      }
-
       console.warn(
         `[RemoteActionsProvider] Action "${action.id}" is unavailable in remote web.`,
       );
     },
-    [projectId, selectedOrgId, workspaceId, hostId],
+    [projectId, selectedOrgId],
   );
 
   const getLabel = useCallback(

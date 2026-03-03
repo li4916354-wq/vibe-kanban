@@ -37,24 +37,6 @@ impl TunnelManager {
         Self::default()
     }
 
-    /// Get or create a tunnel to `localhost:{port}` on the given relay host.
-    /// Routes through the relay proxy with Ed25519 signed WS handshake.
-    /// Returns the local port to connect to.
-    #[allow(dead_code)]
-    pub async fn get_or_create_tunnel(
-        &self,
-        relay_session_base_url: &str,
-        signing_ctx: &SigningContext,
-        port: u16,
-    ) -> anyhow::Result<u16> {
-        let api_path = format!("/api/tunnel?port={port}");
-        let local_port = self
-            .get_or_create_tunnel_for_path(relay_session_base_url, signing_ctx, &api_path)
-            .await?;
-        tracing::info!(remote_port = port, local_port, "Tunnel created");
-        Ok(local_port)
-    }
-
     /// Get or create a tunnel to the embedded SSH session endpoint.
     /// Returns the local port to connect to.
     pub async fn get_or_create_ssh_tunnel(

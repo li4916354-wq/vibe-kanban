@@ -158,17 +158,11 @@ async fn start_relay(
 
     tracing::info!(%ws_url, "Connecting relay control channel");
 
-    let tunnel_enabled = std::env::var("VK_RELAY_TUNNEL").is_ok();
-    if tunnel_enabled {
-        tracing::info!("Port tunneling enabled for relay");
-    }
-
     start_relay_client(RelayClientConfig {
         ws_url,
         bearer_token: access_token,
         local_addr: format!("127.0.0.1:{}", params.local_port),
         shutdown,
-        tunnel_enabled,
     })
     .await
 }

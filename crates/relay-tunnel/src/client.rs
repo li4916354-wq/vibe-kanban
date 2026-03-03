@@ -24,9 +24,6 @@ pub struct RelayClientConfig {
     pub bearer_token: String,
     pub local_addr: String,
     pub shutdown: CancellationToken,
-    /// When true, incoming CONNECT requests will be tunneled to the target
-    /// address specified in the CONNECT URI (must be localhost).
-    pub tunnel_enabled: bool,
 }
 
 /// Connects the relay client control channel and starts handling inbound streams.
@@ -71,7 +68,6 @@ pub async fn start_relay_client(config: RelayClientConfig) -> anyhow::Result<()>
 
     let shutdown = config.shutdown;
     let local_addr = config.local_addr;
-    let tunnel_enabled = config.tunnel_enabled;
 
     loop {
         tokio::select! {
@@ -85,9 +81,8 @@ pub async fn start_relay_client(config: RelayClientConfig) -> anyhow::Result<()>
                     .map_err(|e| anyhow::anyhow!("Relay yamux session error: {e}"))?;
 
                 let local_addr = local_addr.clone();
-                let tunnel_enabled = tunnel_enabled;
                 tokio::spawn(async move {
-                    if let Err(error) = handle_inbound_stream(stream, local_addr, tunnel_enabled).await {
+                    if let Err(error) = handle_inbound_stream(stream, local_addr).await {
                         tracing::warn!(?error, "Relay stream handling failed");
                     }
                 });
@@ -99,7 +94,6 @@ pub async fn start_relay_client(config: RelayClientConfig) -> anyhow::Result<()>
 async fn handle_inbound_stream(
     stream: tokio_yamux::StreamHandle,
     local_addr: String,
-    tunnel_enabled: bool,
 ) -> anyhow::Result<()> {
     let io = TokioIo::new(stream);
 
@@ -108,102 +102,12 @@ async fn handle_inbound_stream(
             io,
             service_fn(move |request: Request<Incoming>| {
                 let local_addr = local_addr.clone();
-                async move {
-                    if request.method() == hyper::Method::CONNECT {
-                        handle_connect_tunnel(request, tunnel_enabled).await
-                    } else {
-                        proxy_to_local(request, local_addr).await
-                    }
-                }
+                async move { proxy_to_local(request, local_addr).await }
             }),
         )
         .with_upgrades()
         .await
         .context("Yamux stream server connection failed")
-}
-
-/// Handles an HTTP CONNECT request by tunneling to the target specified in the
-/// request URI. The target must be a localhost address (127.0.0.1 or localhost).
-///
-/// Responds with 200, upgrades the connection, then copies bytes bidirectionally
-/// between the upgraded stream and a TCP connection to the target.
-async fn handle_connect_tunnel(
-    mut request: Request<Incoming>,
-    tunnel_enabled: bool,
-) -> Result<Response<Body>, Infallible> {
-    if !tunnel_enabled {
-        return Ok(simple_response(
-            StatusCode::FORBIDDEN,
-            "Tunneling not enabled on this host",
-        ));
-    }
-
-    let target_addr = match validate_connect_target(&request) {
-        Ok(addr) => addr,
-        Err(msg) => return Ok(simple_response(StatusCode::BAD_REQUEST, msg)),
-    };
-
-    let request_upgrade = upgrade::on(&mut request);
-
-    let response = Response::builder()
-        .status(StatusCode::OK)
-        .body(Body::empty())
-        .unwrap_or_else(|_| Response::new(Body::empty()));
-
-    tokio::spawn(async move {
-        let Ok(upgraded) = request_upgrade.await else {
-            tracing::warn!("Tunnel upgrade failed");
-            return;
-        };
-
-        let mut tcp_stream = match TcpStream::connect(&target_addr).await {
-            Ok(stream) => stream,
-            Err(error) => {
-                tracing::warn!(?error, %target_addr, "Failed to connect to tunnel target");
-                return;
-            }
-        };
-
-        let mut upgraded = TokioIo::new(upgraded);
-
-        if let Err(error) = tokio::io::copy_bidirectional(&mut upgraded, &mut tcp_stream).await {
-            tracing::debug!(?error, "Tunnel copy ended");
-        }
-    });
-
-    Ok(response)
-}
-
-/// Parse and validate the CONNECT target from the request URI.
-/// Only allows localhost targets (127.0.0.1 or localhost).
-fn validate_connect_target(request: &Request<Incoming>) -> Result<String, &'static str> {
-    let uri = request.uri();
-    let authority = uri
-        .authority()
-        .map(|a| a.as_str())
-        .unwrap_or_else(|| uri.path());
-
-    if authority.is_empty() {
-        return Err("Missing CONNECT target");
-    }
-
-    // Parse host:port from authority
-    let (host, port_str) = if let Some(colon_pos) = authority.rfind(':') {
-        (&authority[..colon_pos], &authority[colon_pos + 1..])
-    } else {
-        return Err("CONNECT target must include port");
-    };
-
-    let _port: u16 = port_str
-        .parse()
-        .map_err(|_| "Invalid port in CONNECT target")?;
-
-    // Only allow localhost targets
-    if host != "127.0.0.1" && host != "localhost" && host != "::1" {
-        return Err("CONNECT target must be localhost");
-    }
-
-    Ok(authority.to_string())
 }
 
 async fn proxy_to_local(

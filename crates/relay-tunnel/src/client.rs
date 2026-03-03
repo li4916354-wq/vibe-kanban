@@ -24,6 +24,10 @@ pub struct RelayClientConfig {
     pub bearer_token: String,
     pub local_addr: String,
     pub shutdown: CancellationToken,
+    /// Optional SSH target address for TCP tunneling via CONNECT.
+    /// When set, incoming CONNECT requests will be tunneled to this address
+    /// (e.g., "127.0.0.1:22" for local SSH).
+    pub ssh_target: Option<String>,
 }
 
 /// Connects the relay client control channel and starts handling inbound streams.
@@ -68,6 +72,7 @@ pub async fn start_relay_client(config: RelayClientConfig) -> anyhow::Result<()>
 
     let shutdown = config.shutdown;
     let local_addr = config.local_addr;
+    let ssh_target = config.ssh_target;
 
     loop {
         tokio::select! {
@@ -81,8 +86,9 @@ pub async fn start_relay_client(config: RelayClientConfig) -> anyhow::Result<()>
                     .map_err(|e| anyhow::anyhow!("Relay yamux session error: {e}"))?;
 
                 let local_addr = local_addr.clone();
+                let ssh_target = ssh_target.clone();
                 tokio::spawn(async move {
-                    if let Err(error) = handle_inbound_stream(stream, local_addr).await {
+                    if let Err(error) = handle_inbound_stream(stream, local_addr, ssh_target).await {
                         tracing::warn!(?error, "Relay stream handling failed");
                     }
                 });
@@ -94,6 +100,7 @@ pub async fn start_relay_client(config: RelayClientConfig) -> anyhow::Result<()>
 async fn handle_inbound_stream(
     stream: tokio_yamux::StreamHandle,
     local_addr: String,
+    ssh_target: Option<String>,
 ) -> anyhow::Result<()> {
     let io = TokioIo::new(stream);
 
@@ -101,12 +108,66 @@ async fn handle_inbound_stream(
         .serve_connection(
             io,
             service_fn(move |request: Request<Incoming>| {
-                proxy_to_local(request, local_addr.clone())
+                let local_addr = local_addr.clone();
+                let ssh_target = ssh_target.clone();
+                async move {
+                    if request.method() == hyper::Method::CONNECT {
+                        handle_connect_tunnel(request, ssh_target).await
+                    } else {
+                        proxy_to_local(request, local_addr).await
+                    }
+                }
             }),
         )
         .with_upgrades()
         .await
         .context("Yamux stream server connection failed")
+}
+
+/// Handles an HTTP CONNECT request by tunneling to the configured SSH target.
+///
+/// Responds with 200, upgrades the connection, then copies bytes bidirectionally
+/// between the upgraded stream and a TCP connection to the SSH target.
+async fn handle_connect_tunnel(
+    mut request: Request<Incoming>,
+    ssh_target: Option<String>,
+) -> Result<Response<Body>, Infallible> {
+    let Some(target_addr) = ssh_target else {
+        return Ok(simple_response(
+            StatusCode::FORBIDDEN,
+            "SSH tunneling not enabled on this host",
+        ));
+    };
+
+    let request_upgrade = upgrade::on(&mut request);
+
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::empty())
+        .unwrap_or_else(|_| Response::new(Body::empty()));
+
+    tokio::spawn(async move {
+        let Ok(upgraded) = request_upgrade.await else {
+            tracing::warn!("SSH tunnel upgrade failed");
+            return;
+        };
+
+        let mut tcp_stream = match TcpStream::connect(&target_addr).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                tracing::warn!(?error, %target_addr, "Failed to connect to SSH target");
+                return;
+            }
+        };
+
+        let mut upgraded = TokioIo::new(upgraded);
+
+        if let Err(error) = tokio::io::copy_bidirectional(&mut upgraded, &mut tcp_stream).await {
+            tracing::debug!(?error, "SSH tunnel copy ended");
+        }
+    });
+
+    Ok(response)
 }
 
 async fn proxy_to_local(

@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo } from "react";
 import {
   createRootRoute,
   Outlet,
@@ -16,6 +16,9 @@ import { ExecutionProcessesProvider } from "@/shared/providers/ExecutionProcesse
 import { TerminalProvider } from "@/shared/providers/TerminalProvider";
 import { LogsPanelProvider } from "@/shared/providers/LogsPanelProvider";
 import { ActionsProvider } from "@/shared/providers/ActionsProvider";
+import { ActionsContext } from "@/shared/hooks/useActions";
+import { useActions } from "@/shared/hooks/useActions";
+import type { ActionDefinition } from "@/shared/types/actions";
 import { useAuth } from "@/shared/hooks/auth/useAuth";
 import { useWorkspaceContext } from "@/shared/hooks/useWorkspaceContext";
 import { AppNavigationProvider } from "@/shared/hooks/useAppNavigation";
@@ -42,6 +45,9 @@ import {
   isProjectDestination,
   isWorkspacesDestination,
 } from "@/shared/lib/routes/appNavigation";
+import { attemptsApi } from "@/shared/lib/api";
+import { openRemoteEditor } from "@remote/shared/lib/desktopBridge";
+import { resolveRelayHostContext } from "@remote/shared/lib/relay/context";
 import NotFoundPage from "../pages/NotFoundPage";
 
 export const Route = createRootRoute({
@@ -87,6 +93,59 @@ function WorkspaceKeyboardShortcuts() {
   return null;
 }
 
+/**
+ * Thin override layer inside ActionsProvider that intercepts specific actions
+ * (e.g. open-in-ide) with remote-specific handling (desktop bridge + relay tunnel)
+ * while delegating everything else to the inner ActionsProvider.
+ */
+function RemoteActionOverrides({ children }: { children: ReactNode }) {
+  const inner = useActions();
+  const { hostId, workspaceId } = useParams({ strict: false });
+
+  const executeAction = useCallback(
+    async (
+      action: ActionDefinition,
+      wsId?: string,
+      repoIdOrProjectId?: string,
+      issueIds?: string[],
+    ): Promise<void> => {
+      if (action.id === "open-in-ide") {
+        if (!workspaceId || !hostId) return;
+        try {
+          const [{ workspace_path }, relayCtx] = await Promise.all([
+            attemptsApi.getEditorPath(workspaceId),
+            resolveRelayHostContext(hostId),
+          ]);
+          const url = await openRemoteEditor({
+            workspace_path,
+            relay_session_base_url: relayCtx.relaySessionBaseUrl,
+            signing_session_id: relayCtx.pairedHost.signing_session_id!,
+            private_key_jwk: relayCtx.pairedHost.private_key_jwk,
+          });
+          if (url) {
+            window.open(url, "_blank");
+          }
+        } catch (err) {
+          console.error("[RemoteActionOverrides] Open in IDE failed:", err);
+        }
+        return;
+      }
+
+      return inner.executeAction(action, wsId, repoIdOrProjectId, issueIds);
+    },
+    [inner.executeAction, workspaceId, hostId],
+  );
+
+  const value = useMemo(
+    () => ({ ...inner, executeAction }),
+    [inner, executeAction],
+  );
+
+  return (
+    <ActionsContext.Provider value={value}>{children}</ActionsContext.Provider>
+  );
+}
+
 function WorkspaceRouteProviders({ children }: { children: ReactNode }) {
   return (
     <WorkspaceProvider>
@@ -94,8 +153,10 @@ function WorkspaceRouteProviders({ children }: { children: ReactNode }) {
         <TerminalProvider>
           <LogsPanelProvider>
             <ActionsProvider>
-              <WorkspaceKeyboardShortcuts />
-              {children}
+              <RemoteActionOverrides>
+                <WorkspaceKeyboardShortcuts />
+                {children}
+              </RemoteActionOverrides>
             </ActionsProvider>
           </LogsPanelProvider>
         </TerminalProvider>

@@ -12,6 +12,8 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 pub struct AxumWsStreamIo {
     ws: WebSocket,
     read_buf: bytes::BytesMut,
+    /// When true, a previous start_send completed but flush is still pending.
+    flushing: bool,
 }
 
 impl AxumWsStreamIo {
@@ -19,6 +21,7 @@ impl AxumWsStreamIo {
         Self {
             ws,
             read_buf: bytes::BytesMut::new(),
+            flushing: false,
         }
     }
 }
@@ -64,11 +67,21 @@ impl AsyncWrite for AxumWsStreamIo {
         }
 
         let this = self.as_mut().get_mut();
-        std::task::ready!(Pin::new(&mut this.ws).poll_ready(cx))
+
+        // If a previous write is still flushing, complete the flush first.
+        if !this.flushing {
+            std::task::ready!(Pin::new(&mut this.ws).poll_ready(cx))
+                .map_err(|e| io::Error::other(e.to_string()))?;
+            Pin::new(&mut this.ws)
+                .start_send(Message::Binary(buf.to_vec().into()))
+                .map_err(|e| io::Error::other(e.to_string()))?;
+            this.flushing = true;
+        }
+
+        // Flush to ensure the frame is actually sent over the wire.
+        std::task::ready!(Pin::new(&mut this.ws).poll_flush(cx))
             .map_err(|e| io::Error::other(e.to_string()))?;
-        Pin::new(&mut this.ws)
-            .start_send(Message::Binary(buf.to_vec().into()))
-            .map_err(|e| io::Error::other(e.to_string()))?;
+        this.flushing = false;
         Poll::Ready(Ok(buf.len()))
     }
 
@@ -79,6 +92,7 @@ impl AsyncWrite for AxumWsStreamIo {
         let this = self.as_mut().get_mut();
         std::task::ready!(Pin::new(&mut this.ws).poll_flush(cx))
             .map_err(|e| io::Error::other(e.to_string()))?;
+        this.flushing = false;
         Poll::Ready(Ok(()))
     }
 

@@ -22,7 +22,10 @@ import type { ActionDefinition } from "@/shared/types/actions";
 import { useAuth } from "@/shared/hooks/auth/useAuth";
 import { useUserSystem } from "@/shared/hooks/useUserSystem";
 import { useWorkspaceContext } from "@/shared/hooks/useWorkspaceContext";
-import type { OpenRemoteEditorRequest } from "shared/types";
+import type {
+  OpenRemoteEditorWithStoredCredentialsRequest,
+  UpsertOpenRemoteEditorCredentialsRequest,
+} from "shared/types";
 import { AppNavigationProvider } from "@/shared/hooks/useAppNavigation";
 import {
   SequenceTrackerProvider,
@@ -48,8 +51,12 @@ import {
   isWorkspacesDestination,
 } from "@/shared/lib/routes/appNavigation";
 import { attemptsApi } from "@/shared/lib/api";
-import { openRemoteEditor } from "@remote/shared/lib/desktopBridge";
+import {
+  openRemoteEditor,
+  upsertOpenRemoteEditorCredentials,
+} from "@remote/shared/lib/desktopBridge";
 import { resolveRelayHostContext } from "@remote/shared/lib/relay/context";
+import { listPairedRelayHosts } from "@/shared/lib/relayPairingStorage";
 import NotFoundPage from "../pages/NotFoundPage";
 
 export const Route = createRootRoute({
@@ -120,13 +127,29 @@ function RemoteActionOverrides({ children }: { children: ReactNode }) {
             attemptsApi.getEditorPath(workspaceId),
             resolveRelayHostContext(hostId),
           ]);
-          const request: OpenRemoteEditorRequest = {
+
+          const pairedHosts = await listPairedRelayHosts();
+          const upsertRequests: UpsertOpenRemoteEditorCredentialsRequest[] =
+            pairedHosts
+              .filter((host) => !!host.signing_session_id)
+              .map((host) => ({
+                host_id: host.host_id,
+                signing_session_id: host.signing_session_id!,
+                private_key_jwk:
+                  host.private_key_jwk as UpsertOpenRemoteEditorCredentialsRequest["private_key_jwk"],
+              }));
+
+          await Promise.all(
+            upsertRequests.map((request) =>
+              upsertOpenRemoteEditorCredentials(request),
+            ),
+          );
+
+          const request: OpenRemoteEditorWithStoredCredentialsRequest = {
+            host_id: hostId,
             workspace_path,
             editor_type: editorType ?? null,
             relay_session_base_url: relayCtx.relaySessionBaseUrl,
-            signing_session_id: relayCtx.pairedHost.signing_session_id!,
-            private_key_jwk: relayCtx.pairedHost
-              .private_key_jwk as OpenRemoteEditorRequest["private_key_jwk"],
           };
           const url = await openRemoteEditor(request);
           if (url) {

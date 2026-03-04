@@ -9,7 +9,7 @@ use ts_rs::TS;
 
 use crate::{signing::SigningContext, ssh_config, tunnel::TunnelManager};
 
-#[derive(Debug, Clone, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct OpenRemoteEditorRequest {
     pub workspace_path: String,
     #[serde(default)]

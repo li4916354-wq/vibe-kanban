@@ -356,6 +356,12 @@ private_key_jwk: JsonValue, };
 
 export type OpenRemoteEditorResponse = { url: string, local_port: number, ssh_alias: string, };
 
+export type OpenRemoteEditorWithStoredCredentialsRequest = { host_id: string, workspace_path: string, editor_type: string | null, relay_session_base_url: string, };
+
+export type UpsertOpenRemoteEditorCredentialsRequest = { host_id: string, signing_session_id: string, private_key_jwk: JsonValue, };
+
+export type UpsertOpenRemoteEditorCredentialsResponse = { upserted: boolean, };
+
 export type LinkedIssueInfo = { remote_project_id: string, issue_id: string, };
 
 export type CreatePrApiRequest = { title: string, body: string | null, target_branch: string | null, draft: boolean | null, repo_id: string, auto_generate_description: boolean, };

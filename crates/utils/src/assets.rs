@@ -52,6 +52,10 @@ pub fn ssh_host_key_path() -> std::path::PathBuf {
     asset_dir().join("ssh_host_ed25519_key")
 }
 
+pub fn relay_host_credentials_path() -> std::path::PathBuf {
+    asset_dir().join("relay_host_credentials.json")
+}
+
 #[derive(RustEmbed)]
 #[folder = "../../assets/sounds"]
 pub struct SoundAssets;

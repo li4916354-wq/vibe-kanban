@@ -6,12 +6,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Context as _;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::TcpListener,
-    sync::Mutex,
-};
+use relay_tunnel::ws_io::{WsIoReadMessage, WsMessageStreamIo};
+use tokio::{net::TcpListener, sync::Mutex};
 use tokio_util::sync::CancellationToken;
+use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
 use crate::signing::SigningContext;
 
@@ -171,7 +169,7 @@ async fn bridge_tcp_to_relay(
     .await
     .context("Failed to connect relay tunnel WS")?;
 
-    let mut ws_io = WsStreamIo::new(ws_stream);
+    let mut ws_io = WsStreamIo::new(ws_stream, read_relay_message, write_relay_message);
 
     tokio::io::copy_bidirectional(&mut tcp_stream, &mut ws_io)
         .await
@@ -204,117 +202,20 @@ fn build_signed_ws_url(
         anyhow::bail!("Unexpected relay session URL scheme: {base}")
     }
 }
-
-// ------- Minimal WebSocket → AsyncRead/AsyncWrite adapter -------
-
-use std::{io, pin::Pin, task::Poll};
-
-use futures_util::{Sink, Stream};
-use tokio::io::ReadBuf;
-
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type WsStreamIo =
+    WsMessageStreamIo<WsStream, Message, fn(Message) -> WsIoReadMessage, fn(Vec<u8>) -> Message>;
 
-struct WsStreamIo {
-    ws: WsStream,
-    read_buf: bytes::BytesMut,
-    /// When true, a previous start_send completed but flush is still pending.
-    flushing: bool,
-}
-
-impl WsStreamIo {
-    fn new(ws: WsStream) -> Self {
-        Self {
-            ws,
-            read_buf: bytes::BytesMut::new(),
-            flushing: false,
-        }
+fn read_relay_message(message: Message) -> WsIoReadMessage {
+    match message {
+        Message::Binary(data) => WsIoReadMessage::Data(data.to_vec()),
+        Message::Text(text) => WsIoReadMessage::Data(text.as_bytes().to_vec()),
+        Message::Close(_) => WsIoReadMessage::Eof,
+        _ => WsIoReadMessage::Skip,
     }
 }
 
-impl AsyncRead for WsStreamIo {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        use tokio_tungstenite::tungstenite::Message;
-
-        loop {
-            let this = self.as_mut().get_mut();
-
-            if !this.read_buf.is_empty() {
-                let n = buf.remaining().min(this.read_buf.len());
-                buf.put_slice(&this.read_buf.split_to(n));
-                return Poll::Ready(Ok(()));
-            }
-
-            match std::task::ready!(Pin::new(&mut this.ws).poll_next(cx)) {
-                Some(Ok(Message::Binary(data))) => {
-                    this.read_buf.extend_from_slice(&data);
-                }
-                Some(Ok(Message::Text(text))) => {
-                    this.read_buf.extend_from_slice(text.as_bytes());
-                }
-                Some(Ok(Message::Close(_))) | None => return Poll::Ready(Ok(())),
-                Some(Ok(_)) => continue,
-                Some(Err(e)) => return Poll::Ready(Err(io::Error::other(e.to_string()))),
-            }
-        }
-    }
+fn write_relay_message(bytes: Vec<u8>) -> Message {
+    Message::Binary(bytes.into())
 }
-
-impl AsyncWrite for WsStreamIo {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        use tokio_tungstenite::tungstenite::Message;
-
-        if buf.is_empty() {
-            return Poll::Ready(Ok(0));
-        }
-
-        let this = self.as_mut().get_mut();
-
-        // If a previous write is still flushing, complete the flush first.
-        if !this.flushing {
-            std::task::ready!(Pin::new(&mut this.ws).poll_ready(cx))
-                .map_err(|e| io::Error::other(e.to_string()))?;
-            Pin::new(&mut this.ws)
-                .start_send(Message::Binary(buf.to_vec().into()))
-                .map_err(|e| io::Error::other(e.to_string()))?;
-            this.flushing = true;
-        }
-
-        // Flush to ensure the frame is actually sent over the wire.
-        std::task::ready!(Pin::new(&mut this.ws).poll_flush(cx))
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        this.flushing = false;
-        Poll::Ready(Ok(buf.len()))
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.as_mut().get_mut();
-        std::task::ready!(Pin::new(&mut this.ws).poll_flush(cx))
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        this.flushing = false;
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.as_mut().get_mut();
-        std::task::ready!(Pin::new(&mut this.ws).poll_close(cx))
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        Poll::Ready(Ok(()))
-    }
-}
-
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;

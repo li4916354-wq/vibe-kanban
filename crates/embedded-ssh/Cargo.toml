@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 relay-control = { path = "../relay-control" }
+relay-tunnel = { path = "../relay-tunnel" }
 utils = { path = "../utils" }
 russh = "0.48"
 russh-keys = "0.48"

@@ -19,6 +19,8 @@ pub enum WsIoReadMessage {
 pub struct WsMessageStreamIo<S, M, FRead, FWrite> {
     ws: S,
     read_buf: BytesMut,
+    /// When true, a previous start_send completed but flush is still pending.
+    flushing: bool,
     read_message: FRead,
     write_message: FWrite,
     _message: PhantomData<fn() -> M>,
@@ -29,6 +31,7 @@ impl<S, M, FRead, FWrite> WsMessageStreamIo<S, M, FRead, FWrite> {
         Self {
             ws,
             read_buf: BytesMut::new(),
+            flushing: false,
             read_message,
             write_message,
             _message: PhantomData,
@@ -89,11 +92,18 @@ where
         }
 
         let this = self.as_mut().get_mut();
-        ready!(Pin::new(&mut this.ws).poll_ready(cx))
+        if !this.flushing {
+            ready!(Pin::new(&mut this.ws).poll_ready(cx))
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            Pin::new(&mut this.ws)
+                .start_send((this.write_message)(buf.to_vec()))
+                .map_err(|error| io::Error::other(error.to_string()))?;
+            this.flushing = true;
+        }
+
+        ready!(Pin::new(&mut this.ws).poll_flush(cx))
             .map_err(|error| io::Error::other(error.to_string()))?;
-        Pin::new(&mut this.ws)
-            .start_send((this.write_message)(buf.to_vec()))
-            .map_err(|error| io::Error::other(error.to_string()))?;
+        this.flushing = false;
 
         Poll::Ready(Ok(buf.len()))
     }
@@ -102,6 +112,7 @@ where
         let this = self.as_mut().get_mut();
         ready!(Pin::new(&mut this.ws).poll_flush(cx))
             .map_err(|error| io::Error::other(error.to_string()))?;
+        this.flushing = false;
         Poll::Ready(Ok(()))
     }
 
@@ -109,6 +120,7 @@ where
         let this = self.as_mut().get_mut();
         ready!(Pin::new(&mut this.ws).poll_close(cx))
             .map_err(|error| io::Error::other(error.to_string()))?;
+        this.flushing = false;
         Poll::Ready(Ok(()))
     }
 }

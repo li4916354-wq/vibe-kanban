@@ -98,8 +98,7 @@ async fn handle_inbound_stream(
         .serve_connection(
             io,
             service_fn(move |request: Request<Incoming>| {
-                let local_addr = local_addr.clone();
-                async move { proxy_to_local(request, local_addr).await }
+                proxy_to_local(request, local_addr.clone())
             }),
         )
         .with_upgrades()

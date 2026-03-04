@@ -32,7 +32,6 @@ enum ChannelState {
         env: HashMap<String, String>,
     },
     Active {
-        _channel: Channel<Msg>,
         writer_tx: mpsc::Sender<Vec<u8>>,
     },
 }
@@ -58,8 +57,8 @@ impl SshSessionHandler {
             .remove(&channel_id)
             .ok_or_else(|| anyhow::anyhow!("Channel not found"))?;
 
-        let (channel, env) = match state {
-            ChannelState::Pending { channel, env } => (channel, env),
+        let env = match state {
+            ChannelState::Pending { channel: _, env } => env,
             ChannelState::Active { .. } => {
                 anyhow::bail!("Channel already has an active session");
             }
@@ -179,7 +178,6 @@ impl SshSessionHandler {
         self.channels.insert(
             channel_id,
             ChannelState::Active {
-                _channel: channel,
                 writer_tx,
             },
         );

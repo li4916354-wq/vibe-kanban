@@ -14,7 +14,7 @@ pub async fn ssh_session_ws(
     let relay_signing = deployment.relay_signing().clone();
 
     ws.on_upgrade(move |socket| async move {
-        let stream = embedded_ssh::ws_adapter::AxumWsStreamIo::new(socket);
+        let stream = relay_tunnel::ws_io::axum_ws_stream_io(socket);
         if let Err(error) = embedded_ssh::run_ssh_session(stream, ssh_config, relay_signing).await {
             tracing::warn!(?error, "SSH session failed");
         }

@@ -5,9 +5,11 @@ use std::{
     task::{Context, Poll, ready},
 };
 
+use axum::extract::ws::{Message as AxumWsMessage, WebSocket as AxumWebSocket};
 use bytes::BytesMut;
 use futures::{Sink, Stream};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio_tungstenite::tungstenite;
 
 pub enum WsIoReadMessage {
     Data(Vec<u8>),
@@ -123,4 +125,52 @@ where
         this.flushing = false;
         Poll::Ready(Ok(()))
     }
+}
+
+pub type AxumWsStreamIo = WsMessageStreamIo<
+    AxumWebSocket,
+    AxumWsMessage,
+    fn(AxumWsMessage) -> WsIoReadMessage,
+    fn(Vec<u8>) -> AxumWsMessage,
+>;
+
+pub fn axum_ws_stream_io(ws: AxumWebSocket) -> AxumWsStreamIo {
+    WsMessageStreamIo::new(ws, read_axum_message, write_axum_message)
+}
+
+fn read_axum_message(message: AxumWsMessage) -> WsIoReadMessage {
+    match message {
+        AxumWsMessage::Binary(data) => WsIoReadMessage::Data(data.to_vec()),
+        AxumWsMessage::Text(text) => WsIoReadMessage::Data(text.as_bytes().to_vec()),
+        AxumWsMessage::Close(_) => WsIoReadMessage::Eof,
+        _ => WsIoReadMessage::Skip,
+    }
+}
+
+fn write_axum_message(bytes: Vec<u8>) -> AxumWsMessage {
+    AxumWsMessage::Binary(bytes.into())
+}
+
+pub type TungsteniteWsStreamIo<S> = WsMessageStreamIo<
+    S,
+    tungstenite::Message,
+    fn(tungstenite::Message) -> WsIoReadMessage,
+    fn(Vec<u8>) -> tungstenite::Message,
+>;
+
+pub fn tungstenite_ws_stream_io<S>(ws: S) -> TungsteniteWsStreamIo<S> {
+    WsMessageStreamIo::new(ws, read_tungstenite_message, write_tungstenite_message)
+}
+
+fn read_tungstenite_message(message: tungstenite::Message) -> WsIoReadMessage {
+    match message {
+        tungstenite::Message::Binary(data) => WsIoReadMessage::Data(data.to_vec()),
+        tungstenite::Message::Text(text) => WsIoReadMessage::Data(text.as_bytes().to_vec()),
+        tungstenite::Message::Close(_) => WsIoReadMessage::Eof,
+        _ => WsIoReadMessage::Skip,
+    }
+}
+
+fn write_tungstenite_message(bytes: Vec<u8>) -> tungstenite::Message {
+    tungstenite::Message::Binary(bytes)
 }

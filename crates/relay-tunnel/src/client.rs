@@ -10,14 +10,11 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
-use tokio_tungstenite::{
-    Connector,
-    tungstenite::{self, client::IntoClientRequest},
-};
+use tokio_tungstenite::{Connector, tungstenite::client::IntoClientRequest};
 use tokio_util::sync::CancellationToken;
 use tokio_yamux::{Config as YamuxConfig, Session};
 
-use crate::ws_io::{WsIoReadMessage, WsMessageStreamIo};
+use crate::ws_io::tungstenite_ws_stream_io;
 
 pub struct RelayClientConfig {
     pub ws_url: String,
@@ -60,7 +57,7 @@ pub async fn start_relay_client(config: RelayClientConfig) -> anyhow::Result<()>
     .await
     .context("Failed to connect relay control channel")?;
 
-    let ws_io = WsMessageStreamIo::new(ws_stream, read_client_message, write_client_message);
+    let ws_io = tungstenite_ws_stream_io(ws_stream);
     let mut session = Session::new_client(ws_io, YamuxConfig::default());
     let mut control = session.control();
 
@@ -185,17 +182,4 @@ fn simple_response(status: StatusCode, body: &'static str) -> Response<Body> {
         .status(status)
         .body(Body::from(body))
         .unwrap_or_else(|_| Response::new(Body::from(body)))
-}
-
-fn read_client_message(message: tungstenite::Message) -> WsIoReadMessage {
-    match message {
-        tungstenite::Message::Binary(data) => WsIoReadMessage::Data(data.to_vec()),
-        tungstenite::Message::Text(text) => WsIoReadMessage::Data(text.as_bytes().to_vec()),
-        tungstenite::Message::Close(_) => WsIoReadMessage::Eof,
-        _ => WsIoReadMessage::Skip,
-    }
-}
-
-fn write_client_message(bytes: Vec<u8>) -> tungstenite::Message {
-    tungstenite::Message::Binary(bytes)
 }

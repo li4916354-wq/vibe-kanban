@@ -6,10 +6,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Context as _;
-use relay_tunnel::ws_io::{WsIoReadMessage, WsMessageStreamIo};
+use relay_tunnel::ws_io::tungstenite_ws_stream_io;
 use tokio::{net::TcpListener, sync::Mutex};
 use tokio_util::sync::CancellationToken;
-use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::signing::SigningContext;
 
@@ -169,7 +169,7 @@ async fn bridge_tcp_to_relay(
     .await
     .context("Failed to connect relay tunnel WS")?;
 
-    let mut ws_io = WsStreamIo::new(ws_stream, read_relay_message, write_relay_message);
+    let mut ws_io = tungstenite_ws_stream_io(ws_stream);
 
     tokio::io::copy_bidirectional(&mut tcp_stream, &mut ws_io)
         .await
@@ -201,21 +201,4 @@ fn build_signed_ws_url(
     } else {
         anyhow::bail!("Unexpected relay session URL scheme: {base}")
     }
-}
-type WsStream =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-type WsStreamIo =
-    WsMessageStreamIo<WsStream, Message, fn(Message) -> WsIoReadMessage, fn(Vec<u8>) -> Message>;
-
-fn read_relay_message(message: Message) -> WsIoReadMessage {
-    match message {
-        Message::Binary(data) => WsIoReadMessage::Data(data.to_vec()),
-        Message::Text(text) => WsIoReadMessage::Data(text.as_bytes().to_vec()),
-        Message::Close(_) => WsIoReadMessage::Eof,
-        _ => WsIoReadMessage::Skip,
-    }
-}
-
-fn write_relay_message(bytes: Vec<u8>) -> Message {
-    Message::Binary(bytes.into())
 }

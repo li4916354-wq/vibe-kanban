@@ -1,12 +1,11 @@
 //! SSH session handler implementing `russh::server::Handler`.
 //!
 //! Handles public key authentication (matched against relay signing sessions),
-//! shell/exec channels with PTY support, and SFTP subsystem requests.
+//! shell/exec channels over stdio, and SFTP subsystem requests.
 
 use std::{collections::HashMap, process::Stdio};
 
 use async_trait::async_trait;
-use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use relay_control::signing::RelaySigningService;
 use russh::{
     Channel, ChannelId, CryptoVec, Pty,
@@ -30,20 +29,12 @@ pub struct SshSessionHandler {
 enum ChannelState {
     Pending {
         channel: Channel<Msg>,
-        pty_params: Option<PtyParams>,
         env: HashMap<String, String>,
     },
     Active {
         _channel: Channel<Msg>,
         writer_tx: mpsc::Sender<Vec<u8>>,
-        pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
     },
-}
-
-struct PtyParams {
-    term: String,
-    cols: u16,
-    rows: u16,
 }
 
 impl SshSessionHandler {
@@ -53,173 +44,6 @@ impl SshSessionHandler {
             channels: HashMap::new(),
             tcpip_forwards: HashMap::new(),
         }
-    }
-
-    fn spawn_pty_session(
-        &mut self,
-        channel_id: ChannelId,
-        command: Option<&str>,
-        session: &mut Session,
-    ) -> Result<(), anyhow::Error> {
-        let state = self
-            .channels
-            .remove(&channel_id)
-            .ok_or_else(|| anyhow::anyhow!("Channel not found"))?;
-
-        let (channel, pty_params, env) = match state {
-            ChannelState::Pending {
-                channel,
-                pty_params,
-                env,
-            } => (channel, pty_params, env),
-            ChannelState::Active { .. } => {
-                anyhow::bail!("Channel already has an active session");
-            }
-        };
-
-        let (cols, rows, term) = match &pty_params {
-            Some(p) => (p.cols, p.rows, p.term.clone()),
-            None => (80, 24, "xterm-256color".to_string()),
-        };
-
-        let pty_system = NativePtySystem::default();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| anyhow::anyhow!("Failed to open PTY: {e}"))?;
-
-        let mut cmd = match command {
-            Some(cmd_str) => {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-                let mut cmd = CommandBuilder::new(&shell);
-                cmd.arg("-c");
-                cmd.arg(cmd_str);
-                cmd
-            }
-            None => {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-                let mut cmd = CommandBuilder::new(&shell);
-                cmd.arg("-l");
-                cmd
-            }
-        };
-
-        cmd.env("TERM", &term);
-        for (k, v) in &env {
-            cmd.env(k, v);
-        }
-
-        if let Ok(home) = std::env::var("HOME") {
-            cmd.cwd(&home);
-        }
-
-        let mut child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| anyhow::anyhow!("Failed to spawn command: {e}"))?;
-
-        // Drop the slave side — the child owns it now
-        drop(pair.slave);
-
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| anyhow::anyhow!("Failed to clone PTY reader: {e}"))?;
-
-        // Channel for writing stdin data to PTY
-        let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(64);
-
-        let mut writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| anyhow::anyhow!("Failed to take PTY writer: {e}"))?;
-
-        // Blocking task: PTY writer (receives data from SSH channel -> writes to PTY).
-        let _writer_task = tokio::task::spawn_blocking(move || {
-            use std::io::Write;
-            while let Some(data) = writer_rx.blocking_recv() {
-                if writer.write_all(&data).is_err() {
-                    break;
-                }
-                if writer.flush().is_err() {
-                    break;
-                }
-            }
-        });
-
-        // Bridge PTY reader blocking output into async SSH channel writes.
-        let (pty_output_tx, mut pty_output_rx) = mpsc::channel::<Vec<u8>>(128);
-
-        let _reader_task = tokio::task::spawn_blocking(move || {
-            let mut buf = vec![0u8; 8192];
-            loop {
-                use std::io::Read;
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if pty_output_tx.blocking_send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        tracing::warn!(?channel_id, ?error, "PTY reader: read error");
-                        break;
-                    }
-                }
-            }
-        });
-
-        // Async forwarder: PTY output -> SSH channel data
-        let handle = session.handle();
-        tokio::spawn(async move {
-            while let Some(bytes) = pty_output_rx.recv().await {
-                let n = bytes.len();
-                let data = CryptoVec::from_slice(&bytes);
-                if let Err(error) = handle.data(channel_id, data).await {
-                    tracing::warn!(?channel_id, ?error, "PTY reader: handle.data failed");
-                    break;
-                }
-                tracing::info!(?channel_id, n, "PTY reader: done handling bytes");
-            }
-        });
-
-        // Wait for child process exit on blocking pool, then close SSH channel.
-        let handle = session.handle();
-        tokio::spawn(async move {
-            let exit_code = tokio::task::spawn_blocking(move || match child.wait() {
-                Ok(status) => status.exit_code(),
-                Err(error) => {
-                    tracing::warn!(?channel_id, ?error, "PTY child wait failed");
-                    1
-                }
-            })
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(?channel_id, ?error, "PTY child wait task join failed");
-                1
-            });
-            let _ = handle
-                .exit_status_request(channel_id, exit_code as u32)
-                .await;
-            let _ = handle.eof(channel_id).await;
-            let _ = handle.close(channel_id).await;
-        });
-
-        self.channels.insert(
-            channel_id,
-            ChannelState::Active {
-                _channel: channel,
-                writer_tx,
-                pty_master: Some(pair.master),
-            },
-        );
-
-        let _ = session.channel_success(channel_id);
-        Ok(())
     }
 
     fn spawn_stdio_session(
@@ -234,12 +58,8 @@ impl SshSessionHandler {
             .remove(&channel_id)
             .ok_or_else(|| anyhow::anyhow!("Channel not found"))?;
 
-        let (channel, _pty_params, env) = match state {
-            ChannelState::Pending {
-                channel,
-                pty_params,
-                env,
-            } => (channel, pty_params, env),
+        let (channel, env) = match state {
+            ChannelState::Pending { channel, env } => (channel, env),
             ChannelState::Active { .. } => {
                 anyhow::bail!("Channel already has an active session");
             }
@@ -361,7 +181,6 @@ impl SshSessionHandler {
             ChannelState::Active {
                 _channel: channel,
                 writer_tx,
-                pty_master: None,
             },
         );
 
@@ -436,7 +255,6 @@ impl russh::server::Handler for SshSessionHandler {
             id,
             ChannelState::Pending {
                 channel,
-                pty_params: None,
                 env: HashMap::new(),
             },
         );
@@ -446,22 +264,16 @@ impl russh::server::Handler for SshSessionHandler {
     async fn pty_request(
         &mut self,
         channel: ChannelId,
-        term: &str,
-        col_width: u32,
-        row_height: u32,
+        _term: &str,
+        _col_width: u32,
+        _row_height: u32,
         _pix_width: u32,
         _pix_height: u32,
         _modes: &[(Pty, u32)],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if let Some(ChannelState::Pending { pty_params, .. }) = self.channels.get_mut(&channel) {
-            *pty_params = Some(PtyParams {
-                term: term.to_string(),
-                cols: col_width as u16,
-                rows: row_height as u16,
-            });
-        }
-        let _ = session.channel_success(channel);
+        // PTY mode is intentionally unsupported: SSH sessions run over stdio.
+        let _ = session.channel_failure(channel);
         Ok(())
     }
 
@@ -659,18 +471,7 @@ impl russh::server::Handler for SshSessionHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::info!(?channel, "Shell request");
-        let has_pty = matches!(
-            self.channels.get(&channel),
-            Some(ChannelState::Pending {
-                pty_params: Some(_),
-                ..
-            })
-        );
-        if has_pty {
-            self.spawn_pty_session(channel, None, session)?;
-        } else {
-            self.spawn_stdio_session(channel, None, session)?;
-        }
+        self.spawn_stdio_session(channel, None, session)?;
         Ok(())
     }
 
@@ -682,18 +483,7 @@ impl russh::server::Handler for SshSessionHandler {
     ) -> Result<(), Self::Error> {
         let command = std::str::from_utf8(data).unwrap_or("");
         tracing::info!(?channel, %command, "Exec request");
-        let has_pty = matches!(
-            self.channels.get(&channel),
-            Some(ChannelState::Pending {
-                pty_params: Some(_),
-                ..
-            })
-        );
-        if has_pty {
-            self.spawn_pty_session(channel, Some(command), session)?;
-        } else {
-            self.spawn_stdio_session(channel, Some(command), session)?;
-        }
+        self.spawn_stdio_session(channel, Some(command), session)?;
         Ok(())
     }
 
@@ -705,30 +495,6 @@ impl russh::server::Handler for SshSessionHandler {
     ) -> Result<(), Self::Error> {
         if let Some(ChannelState::Active { writer_tx, .. }) = self.channels.get(&channel) {
             let _ = writer_tx.send(data.to_vec()).await;
-        }
-        Ok(())
-    }
-
-    async fn window_change_request(
-        &mut self,
-        channel: ChannelId,
-        col_width: u32,
-        row_height: u32,
-        _pix_width: u32,
-        _pix_height: u32,
-        _session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        if let Some(ChannelState::Active {
-            pty_master: Some(pty_master),
-            ..
-        }) = self.channels.get(&channel)
-        {
-            let _ = pty_master.resize(PtySize {
-                rows: row_height as u16,
-                cols: col_width as u16,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
         }
         Ok(())
     }

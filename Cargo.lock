@@ -1840,11 +1840,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
- "bytes",
  "ed25519-dalek",
- "futures-util",
- "portable-pty",
  "rand 0.8.5",
  "relay-control",
  "relay-tunnel",

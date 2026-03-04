@@ -132,6 +132,8 @@ fn generate_types_content() -> String {
         server::routes::sessions::review::ReviewError::decl(),
         server::routes::task_attempts::OpenEditorRequest::decl(),
         server::routes::task_attempts::OpenEditorResponse::decl(),
+        desktop_bridge::service::OpenRemoteEditorRequest::decl(),
+        desktop_bridge::service::OpenRemoteEditorResponse::decl(),
         db::models::requests::LinkedIssueInfo::decl(),
         server::routes::task_attempts::pr::CreatePrApiRequest::decl(),
         server::routes::images::ImageResponse::decl(),

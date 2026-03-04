@@ -20,7 +20,9 @@ import { ActionsContext } from "@/shared/hooks/useActions";
 import { useActions } from "@/shared/hooks/useActions";
 import type { ActionDefinition } from "@/shared/types/actions";
 import { useAuth } from "@/shared/hooks/auth/useAuth";
+import { useUserSystem } from "@/shared/hooks/useUserSystem";
 import { useWorkspaceContext } from "@/shared/hooks/useWorkspaceContext";
+import type { OpenRemoteEditorRequest } from "shared/types";
 import { AppNavigationProvider } from "@/shared/hooks/useAppNavigation";
 import {
   SequenceTrackerProvider,
@@ -101,6 +103,8 @@ function WorkspaceKeyboardShortcuts() {
 function RemoteActionOverrides({ children }: { children: ReactNode }) {
   const inner = useActions();
   const { hostId, workspaceId } = useParams({ strict: false });
+  const { config } = useUserSystem();
+  const editorType = config?.editor?.editor_type;
 
   const executeAction = useCallback(
     async (
@@ -116,12 +120,15 @@ function RemoteActionOverrides({ children }: { children: ReactNode }) {
             attemptsApi.getEditorPath(workspaceId),
             resolveRelayHostContext(hostId),
           ]);
-          const url = await openRemoteEditor({
+          const request: OpenRemoteEditorRequest = {
             workspace_path,
+            editor_type: editorType ?? null,
             relay_session_base_url: relayCtx.relaySessionBaseUrl,
             signing_session_id: relayCtx.pairedHost.signing_session_id!,
-            private_key_jwk: relayCtx.pairedHost.private_key_jwk,
-          });
+            private_key_jwk: relayCtx.pairedHost
+              .private_key_jwk as OpenRemoteEditorRequest["private_key_jwk"],
+          };
+          const url = await openRemoteEditor(request);
           if (url) {
             window.open(url, "_blank");
           }
@@ -133,7 +140,7 @@ function RemoteActionOverrides({ children }: { children: ReactNode }) {
 
       return inner.executeAction(action, wsId, repoIdOrProjectId, issueIds);
     },
-    [inner.executeAction, workspaceId, hostId],
+    [inner.executeAction, workspaceId, hostId, editorType],
   );
 
   const value = useMemo(

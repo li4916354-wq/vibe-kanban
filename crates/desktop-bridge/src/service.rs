@@ -5,10 +5,11 @@
 //! main local server process).
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::{signing::SigningContext, ssh_config, tunnel::TunnelManager};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
 pub struct OpenRemoteEditorRequest {
     pub workspace_path: String,
     #[serde(default)]
@@ -21,7 +22,7 @@ pub struct OpenRemoteEditorRequest {
     pub private_key_jwk: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct OpenRemoteEditorResponse {
     pub url: String,
     pub local_port: u16,

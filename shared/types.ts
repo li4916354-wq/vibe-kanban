@@ -340,6 +340,22 @@ export type OpenEditorRequest = { editor_type: string | null, file_path: string 
 
 export type OpenEditorResponse = { url: string | null, };
 
+export type OpenRemoteEditorRequest = { workspace_path: string, editor_type: string | null, 
+/**
+ * Relay proxy session URL (e.g. https://relay.example.com/relay/h/{host_id}/s/{session_id})
+ */
+relay_session_base_url: string, 
+/**
+ * Ed25519 signing session ID
+ */
+signing_session_id: string, 
+/**
+ * Ed25519 private key in JWK format
+ */
+private_key_jwk: JsonValue, };
+
+export type OpenRemoteEditorResponse = { url: string, local_port: number, ssh_alias: string, };
+
 export type LinkedIssueInfo = { remote_project_id: string, issue_id: string, };
 
 export type CreatePrApiRequest = { title: string, body: string | null, target_branch: string | null, draft: boolean | null, repo_id: string, auto_generate_description: boolean, };

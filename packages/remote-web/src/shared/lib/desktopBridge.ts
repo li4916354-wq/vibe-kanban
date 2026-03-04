@@ -1,18 +1,9 @@
+import type { OpenRemoteEditorRequest } from "shared/types";
+
 const BRIDGE_PORT = 15147;
 
 function getBridgeUrl(): string {
   return `http://127.0.0.1:${BRIDGE_PORT}`;
-}
-
-export interface OpenRemoteEditorRequest {
-  workspace_path: string;
-  editor_type?: string;
-  /** Relay proxy session URL (e.g. https://relay.example.com/relay/h/{host_id}/s/{session_id}) */
-  relay_session_base_url: string;
-  /** Ed25519 signing session ID */
-  signing_session_id: string;
-  /** Ed25519 private key in JWK format */
-  private_key_jwk: JsonWebKey;
 }
 
 export async function openRemoteEditor(

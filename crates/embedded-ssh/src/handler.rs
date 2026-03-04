@@ -3,7 +3,7 @@
 //! Handles public key authentication (matched against relay signing sessions),
 //! shell/exec channels with PTY support, and SFTP subsystem requests.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, process::Stdio};
 
 use async_trait::async_trait;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
@@ -13,24 +13,30 @@ use russh::{
     server::{Auth, Msg, Session},
 };
 use russh_keys::PublicKey;
-use tokio::sync::mpsc;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+    sync::mpsc,
+};
 
 use crate::sftp::SftpHandler;
 
 pub struct SshSessionHandler {
     relay_signing: RelaySigningService,
     channels: HashMap<ChannelId, ChannelState>,
-    pending_env: HashMap<String, String>,
+    tcpip_forwards: HashMap<(String, u32), tokio::task::JoinHandle<()>>,
 }
 
 enum ChannelState {
     Pending {
         channel: Channel<Msg>,
         pty_params: Option<PtyParams>,
+        env: HashMap<String, String>,
     },
     Active {
+        _channel: Channel<Msg>,
         writer_tx: mpsc::Sender<Vec<u8>>,
-        pty_master: Box<dyn portable_pty::MasterPty + Send>,
+        pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
     },
 }
 
@@ -45,7 +51,7 @@ impl SshSessionHandler {
         Self {
             relay_signing,
             channels: HashMap::new(),
-            pending_env: HashMap::new(),
+            tcpip_forwards: HashMap::new(),
         }
     }
 
@@ -60,11 +66,12 @@ impl SshSessionHandler {
             .remove(&channel_id)
             .ok_or_else(|| anyhow::anyhow!("Channel not found"))?;
 
-        let (_channel, pty_params) = match state {
+        let (channel, pty_params, env) = match state {
             ChannelState::Pending {
                 channel,
                 pty_params,
-            } => (channel, pty_params),
+                env,
+            } => (channel, pty_params, env),
             ChannelState::Active { .. } => {
                 anyhow::bail!("Channel already has an active session");
             }
@@ -102,7 +109,7 @@ impl SshSessionHandler {
         };
 
         cmd.env("TERM", &term);
-        for (k, v) in &self.pending_env {
+        for (k, v) in &env {
             cmd.env(k, v);
         }
 
@@ -131,39 +138,70 @@ impl SshSessionHandler {
             .take_writer()
             .map_err(|e| anyhow::anyhow!("Failed to take PTY writer: {e}"))?;
 
-        // Background task: PTY writer (receives data from SSH channel → writes to PTY)
-        tokio::spawn(async move {
-            while let Some(data) = writer_rx.recv().await {
-                use std::io::Write;
+        // Blocking task: PTY writer (receives data from SSH channel -> writes to PTY).
+        let _writer_task = tokio::task::spawn_blocking(move || {
+            use std::io::Write;
+            while let Some(data) = writer_rx.blocking_recv() {
                 if writer.write_all(&data).is_err() {
+                    break;
+                }
+                if writer.flush().is_err() {
                     break;
                 }
             }
         });
 
-        // Background task: PTY reader → SSH channel data
-        let handle = session.handle();
-        tokio::spawn(async move {
+        // Bridge PTY reader blocking output into async SSH channel writes.
+        let (pty_output_tx, mut pty_output_rx) = mpsc::channel::<Vec<u8>>(128);
+
+        let _reader_task = tokio::task::spawn_blocking(move || {
             let mut buf = vec![0u8; 8192];
             loop {
                 use std::io::Read;
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        let data = CryptoVec::from_slice(&buf[..n]);
-                        if handle.data(channel_id, data).await.is_err() {
+                        if pty_output_tx.blocking_send(buf[..n].to_vec()).is_err() {
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(error) => {
+                        tracing::warn!(?channel_id, ?error, "PTY reader: read error");
+                        break;
+                    }
                 }
             }
+        });
 
-            // Wait for child to exit and send exit status
-            let exit_code = match child.wait() {
+        // Async forwarder: PTY output -> SSH channel data
+        let handle = session.handle();
+        tokio::spawn(async move {
+            while let Some(bytes) = pty_output_rx.recv().await {
+                let n = bytes.len();
+                let data = CryptoVec::from_slice(&bytes);
+                if let Err(error) = handle.data(channel_id, data).await {
+                    tracing::warn!(?channel_id, ?error, "PTY reader: handle.data failed");
+                    break;
+                }
+                tracing::info!(?channel_id, n, "PTY reader: done handling bytes");
+            }
+        });
+
+        // Wait for child process exit on blocking pool, then close SSH channel.
+        let handle = session.handle();
+        tokio::spawn(async move {
+            let exit_code = tokio::task::spawn_blocking(move || match child.wait() {
                 Ok(status) => status.exit_code(),
-                Err(_) => 1,
-            };
+                Err(error) => {
+                    tracing::warn!(?channel_id, ?error, "PTY child wait failed");
+                    1
+                }
+            })
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(?channel_id, ?error, "PTY child wait task join failed");
+                1
+            });
             let _ = handle
                 .exit_status_request(channel_id, exit_code as u32)
                 .await;
@@ -174,13 +212,181 @@ impl SshSessionHandler {
         self.channels.insert(
             channel_id,
             ChannelState::Active {
+                _channel: channel,
                 writer_tx,
-                pty_master: pair.master,
+                pty_master: Some(pair.master),
             },
         );
 
         let _ = session.channel_success(channel_id);
         Ok(())
+    }
+
+    fn spawn_stdio_session(
+        &mut self,
+        channel_id: ChannelId,
+        command: Option<&str>,
+        session: &mut Session,
+    ) -> Result<(), anyhow::Error> {
+        tracing::info!("Spawning stdio session (no PTY)");
+        let state = self
+            .channels
+            .remove(&channel_id)
+            .ok_or_else(|| anyhow::anyhow!("Channel not found"))?;
+
+        let (channel, _pty_params, env) = match state {
+            ChannelState::Pending {
+                channel,
+                pty_params,
+                env,
+            } => (channel, pty_params, env),
+            ChannelState::Active { .. } => {
+                anyhow::bail!("Channel already has an active session");
+            }
+        };
+
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut cmd = Command::new(shell);
+        match command {
+            Some(cmd_str) => {
+                cmd.arg("-c");
+                cmd.arg(cmd_str);
+            }
+            None => {
+                // Non-interactive shell reading commands from stdin.
+                cmd.arg("-s");
+            }
+        }
+
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        cmd.env("TERM", "xterm-256color");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            cmd.current_dir(home);
+        }
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to spawn stdio command: {e}"))?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to take child stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to take child stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to take child stderr"))?;
+
+        let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(64);
+        tokio::spawn(async move {
+            let mut stdin = stdin;
+            while let Some(data) = writer_rx.recv().await {
+                if stdin.write_all(&data).await.is_err() {
+                    break;
+                }
+                if stdin.flush().await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let handle = session.handle();
+        tokio::spawn(async move {
+            let mut stdout = stdout;
+            let mut buf = vec![0u8; 8192];
+            loop {
+                match stdout.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let data = CryptoVec::from_slice(&buf[..n]);
+                        if handle.data(channel_id, data).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(?channel_id, ?error, "Stdio stdout read error");
+                        break;
+                    }
+                }
+            }
+        });
+
+        let handle = session.handle();
+        tokio::spawn(async move {
+            let mut stderr = stderr;
+            let mut buf = vec![0u8; 8192];
+            loop {
+                match stderr.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let data = CryptoVec::from_slice(&buf[..n]);
+                        if handle.extended_data(channel_id, 1, data).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(?channel_id, ?error, "Stdio stderr read error");
+                        break;
+                    }
+                }
+            }
+        });
+
+        let handle = session.handle();
+        tokio::spawn(async move {
+            let exit_code = match child.wait().await {
+                Ok(status) => status.code().unwrap_or_default().max(0) as u32,
+                Err(error) => {
+                    tracing::warn!(?channel_id, ?error, "Stdio child wait failed");
+                    1
+                }
+            };
+
+            let _ = handle.exit_status_request(channel_id, exit_code).await;
+            let _ = handle.eof(channel_id).await;
+            let _ = handle.close(channel_id).await;
+        });
+
+        self.channels.insert(
+            channel_id,
+            ChannelState::Active {
+                _channel: channel,
+                writer_tx,
+                pty_master: None,
+            },
+        );
+
+        let _ = session.channel_success(channel_id);
+        Ok(())
+    }
+
+    fn is_loopback_target(host: &str) -> bool {
+        matches!(host, "localhost" | "127.0.0.1" | "::1")
+    }
+
+    fn normalize_loopback_bind_address(address: &str) -> Option<String> {
+        match address {
+            "" | "localhost" | "127.0.0.1" => Some("127.0.0.1".to_string()),
+            "::1" => Some("::1".to_string()),
+            _ => None,
+        }
+    }
+}
+
+impl Drop for SshSessionHandler {
+    fn drop(&mut self) {
+        for (_, task) in self.tcpip_forwards.drain() {
+            task.abort();
+        }
     }
 }
 
@@ -231,6 +437,7 @@ impl russh::server::Handler for SshSessionHandler {
             ChannelState::Pending {
                 channel,
                 pty_params: None,
+                env: HashMap::new(),
             },
         );
         Ok(true)
@@ -258,13 +465,212 @@ impl russh::server::Handler for SshSessionHandler {
         Ok(())
     }
 
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        originator_address: &str,
+        originator_port: u32,
+        _session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        if port_to_connect == 0 || port_to_connect > u16::MAX as u32 {
+            tracing::warn!(
+                %host_to_connect,
+                port_to_connect,
+                %originator_address,
+                originator_port,
+                "direct-tcpip denied: invalid target port"
+            );
+            return Ok(false);
+        }
+
+        if !Self::is_loopback_target(host_to_connect) {
+            tracing::warn!(
+                %host_to_connect,
+                port_to_connect,
+                %originator_address,
+                originator_port,
+                "direct-tcpip denied: non-loopback target"
+            );
+            return Ok(false);
+        }
+
+        let port = port_to_connect as u16;
+        let target_host = host_to_connect.to_string();
+        tracing::info!(
+            %target_host,
+            port,
+            %originator_address,
+            originator_port,
+            "direct-tcpip accepted"
+        );
+
+        tokio::spawn(async move {
+            let mut ssh_stream = channel.into_stream();
+            match tokio::net::TcpStream::connect((target_host.as_str(), port)).await {
+                Ok(mut target_stream) => {
+                    if let Err(error) =
+                        tokio::io::copy_bidirectional(&mut ssh_stream, &mut target_stream).await
+                    {
+                        tracing::debug!(%target_host, port, ?error, "direct-tcpip relay ended with error");
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%target_host, port, ?error, "direct-tcpip connect failed");
+                }
+            }
+
+            let _ = ssh_stream.shutdown().await;
+        });
+
+        Ok(true)
+    }
+
+    async fn tcpip_forward(
+        &mut self,
+        address: &str,
+        port: &mut u32,
+        session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        let Some(bind_addr) = Self::normalize_loopback_bind_address(address) else {
+            tracing::warn!(%address, requested_port = *port, "tcpip-forward denied: non-loopback bind");
+            return Ok(false);
+        };
+
+        if *port > u16::MAX as u32 {
+            tracing::warn!(%bind_addr, requested_port = *port, "tcpip-forward denied: invalid bind port");
+            return Ok(false);
+        }
+
+        let bind_port = *port as u16;
+        let listener = match tokio::net::TcpListener::bind((bind_addr.as_str(), bind_port)).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                tracing::warn!(%bind_addr, bind_port, ?error, "tcpip-forward bind failed");
+                return Ok(false);
+            }
+        };
+
+        let actual_port = match listener.local_addr() {
+            Ok(addr) => addr.port() as u32,
+            Err(error) => {
+                tracing::warn!(%bind_addr, ?error, "tcpip-forward failed to get local address");
+                return Ok(false);
+            }
+        };
+        *port = actual_port;
+
+        let key = (bind_addr.clone(), actual_port);
+        if self.tcpip_forwards.contains_key(&key) {
+            tracing::warn!(%bind_addr, actual_port, "tcpip-forward denied: duplicate forward");
+            return Ok(false);
+        }
+
+        let handle = session.handle();
+        let bind_addr_for_task = bind_addr.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                let (mut inbound, peer_addr) = match listener.accept().await {
+                    Ok(v) => v,
+                    Err(error) => {
+                        tracing::warn!(%bind_addr_for_task, actual_port, ?error, "tcpip-forward accept failed");
+                        break;
+                    }
+                };
+
+                let peer_ip = peer_addr.ip().to_string();
+                let peer_port = peer_addr.port() as u32;
+                let connected_addr = bind_addr_for_task.clone();
+                let handle = handle.clone();
+                tokio::spawn(async move {
+                    let channel = match handle
+                        .channel_open_forwarded_tcpip(
+                            connected_addr.clone(),
+                            actual_port,
+                            peer_ip.clone(),
+                            peer_port,
+                        )
+                        .await
+                    {
+                        Ok(channel) => channel,
+                        Err(error) => {
+                            tracing::warn!(
+                                %connected_addr,
+                                actual_port,
+                                %peer_ip,
+                                peer_port,
+                                ?error,
+                                "forwarded-tcpip channel open failed"
+                            );
+                            return;
+                        }
+                    };
+
+                    let mut ssh_stream = channel.into_stream();
+                    if let Err(error) =
+                        tokio::io::copy_bidirectional(&mut ssh_stream, &mut inbound).await
+                    {
+                        tracing::debug!(
+                            %connected_addr,
+                            actual_port,
+                            %peer_ip,
+                            peer_port,
+                            ?error,
+                            "forwarded-tcpip relay ended with error"
+                        );
+                    }
+                    let _ = ssh_stream.shutdown().await;
+                    let _ = inbound.shutdown().await;
+                });
+            }
+        });
+
+        self.tcpip_forwards.insert(key, task);
+        tracing::info!(%bind_addr, actual_port, "tcpip-forward enabled");
+        Ok(true)
+    }
+
+    async fn cancel_tcpip_forward(
+        &mut self,
+        address: &str,
+        port: u32,
+        _session: &mut Session,
+    ) -> Result<bool, Self::Error> {
+        let Some(bind_addr) = Self::normalize_loopback_bind_address(address) else {
+            tracing::warn!(%address, port, "cancel-tcpip-forward denied: non-loopback bind");
+            return Ok(false);
+        };
+
+        let key = (bind_addr.clone(), port);
+        if let Some(task) = self.tcpip_forwards.remove(&key) {
+            task.abort();
+            tracing::info!(%bind_addr, port, "tcpip-forward cancelled");
+            Ok(true)
+        } else {
+            tracing::warn!(%bind_addr, port, "cancel-tcpip-forward failed: forward not found");
+            Ok(false)
+        }
+    }
+
     async fn shell_request(
         &mut self,
         channel: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::info!(?channel, "Shell request");
-        self.spawn_pty_session(channel, None, session)?;
+        let has_pty = matches!(
+            self.channels.get(&channel),
+            Some(ChannelState::Pending {
+                pty_params: Some(_),
+                ..
+            })
+        );
+        if has_pty {
+            self.spawn_pty_session(channel, None, session)?;
+        } else {
+            self.spawn_stdio_session(channel, None, session)?;
+        }
         Ok(())
     }
 
@@ -276,7 +682,18 @@ impl russh::server::Handler for SshSessionHandler {
     ) -> Result<(), Self::Error> {
         let command = std::str::from_utf8(data).unwrap_or("");
         tracing::info!(?channel, %command, "Exec request");
-        self.spawn_pty_session(channel, Some(command), session)?;
+        let has_pty = matches!(
+            self.channels.get(&channel),
+            Some(ChannelState::Pending {
+                pty_params: Some(_),
+                ..
+            })
+        );
+        if has_pty {
+            self.spawn_pty_session(channel, Some(command), session)?;
+        } else {
+            self.spawn_stdio_session(channel, Some(command), session)?;
+        }
         Ok(())
     }
 
@@ -301,7 +718,11 @@ impl russh::server::Handler for SshSessionHandler {
         _pix_height: u32,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if let Some(ChannelState::Active { pty_master, .. }) = self.channels.get(&channel) {
+        if let Some(ChannelState::Active {
+            pty_master: Some(pty_master),
+            ..
+        }) = self.channels.get(&channel)
+        {
             let _ = pty_master.resize(PtySize {
                 rows: row_height as u16,
                 cols: col_width as u16,
@@ -319,8 +740,9 @@ impl russh::server::Handler for SshSessionHandler {
         variable_value: &str,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        self.pending_env
-            .insert(variable_name.to_string(), variable_value.to_string());
+        if let Some(ChannelState::Pending { env, .. }) = self.channels.get_mut(&_channel) {
+            env.insert(variable_name.to_string(), variable_value.to_string());
+        }
         Ok(())
     }
 

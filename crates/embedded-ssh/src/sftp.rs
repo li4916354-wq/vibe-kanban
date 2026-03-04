@@ -3,11 +3,12 @@
 //! Provides filesystem operations (read, write, stat, readdir, etc.) needed
 //! by VS Code Remote SSH for file browsing and editing.
 
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::{
     collections::HashMap,
     fs,
     io::{Read, Seek, Write},
-    os::unix::fs::{MetadataExt, PermissionsExt},
     path::PathBuf,
 };
 
@@ -78,15 +79,32 @@ impl SftpHandler {
 }
 
 fn metadata_to_file_attrs(meta: &fs::Metadata) -> FileAttributes {
-    FileAttributes {
-        size: Some(meta.size()),
-        uid: Some(meta.uid()),
-        user: None,
-        gid: Some(meta.gid()),
-        group: None,
-        permissions: Some(meta.permissions().mode()),
-        atime: Some(meta.atime() as u32),
-        mtime: Some(meta.mtime() as u32),
+    #[cfg(unix)]
+    {
+        FileAttributes {
+            size: Some(meta.size()),
+            uid: Some(meta.uid()),
+            user: None,
+            gid: Some(meta.gid()),
+            group: None,
+            permissions: Some(meta.permissions().mode()),
+            atime: Some(meta.atime() as u32),
+            mtime: Some(meta.mtime() as u32),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        FileAttributes {
+            size: Some(meta.len()),
+            uid: None,
+            user: None,
+            gid: None,
+            group: None,
+            permissions: None,
+            atime: None,
+            mtime: None,
+        }
     }
 }
 
@@ -410,8 +428,11 @@ impl russh_sftp::server::Handler for SftpHandler {
     ) -> impl std::future::Future<Output = Result<Status, Self::Error>> + Send {
         let result = (|| {
             if let Some(perms) = attrs.permissions {
+                #[cfg(unix)]
                 fs::set_permissions(&path, fs::Permissions::from_mode(perms))
                     .map_err(SftpError::from)?;
+                #[cfg(not(unix))]
+                let _ = perms;
             }
             Ok(self.ok_status(id))
         })();
@@ -424,9 +445,35 @@ impl russh_sftp::server::Handler for SftpHandler {
         linkpath: String,
         targetpath: String,
     ) -> impl std::future::Future<Output = Result<Status, Self::Error>> + Send {
-        let result = std::os::unix::fs::symlink(&targetpath, &linkpath)
-            .map(|_| self.ok_status(id))
-            .map_err(SftpError::from);
+        let result = {
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&targetpath, &linkpath)
+                    .map(|_| self.ok_status(id))
+                    .map_err(SftpError::from)
+            }
+            #[cfg(windows)]
+            {
+                let symlink_result = if fs::metadata(&targetpath)
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+                {
+                    std::os::windows::fs::symlink_dir(&targetpath, &linkpath)
+                } else {
+                    std::os::windows::fs::symlink_file(&targetpath, &linkpath)
+                };
+                symlink_result
+                    .map(|_| self.ok_status(id))
+                    .map_err(SftpError::from)
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                Err(SftpError {
+                    code: StatusCode::OpUnsupported,
+                    message: "Symlink is unsupported on this platform".to_string(),
+                })
+            }
+        };
         async { result }
     }
 
@@ -452,6 +499,7 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 }
 
+#[cfg(unix)]
 fn format_longname(name: &str, meta: &fs::Metadata) -> String {
     let file_type = if meta.is_dir() {
         "d"
@@ -466,4 +514,17 @@ fn format_longname(name: &str, meta: &fs::Metadata) -> String {
         uid = meta.uid(),
         gid = meta.gid(),
     )
+}
+
+#[cfg(not(unix))]
+fn format_longname(name: &str, meta: &fs::Metadata) -> String {
+    let file_type = if meta.is_dir() {
+        "d"
+    } else if meta.file_type().is_symlink() {
+        "l"
+    } else {
+        "-"
+    };
+    let size = meta.len();
+    format!("{file_type}rwxr-xr-x 1 0 0 {size} Jan 1 00:00 {name}")
 }

@@ -427,19 +427,18 @@ impl LocalDeployment {
         signing_session_id: String,
         private_key_jwk: serde_json::Value,
     ) -> anyhow::Result<()> {
-        let snapshot = {
-            let mut credentials = self.relay_host_credentials.write().await;
-            credentials.insert(
-                host_id,
-                RelayHostCredentials {
-                    signing_session_id,
-                    private_key_jwk,
-                },
-            );
-            credentials.clone()
-        };
+        let mut credentials = self.relay_host_credentials.write().await;
+        credentials.insert(
+            host_id,
+            RelayHostCredentials {
+                signing_session_id,
+                private_key_jwk,
+            },
+        );
 
-        persist_relay_host_credentials_map(&snapshot).await
+        // Persist while holding the write lock so concurrent upserts cannot
+        // write older snapshots after newer updates.
+        persist_relay_host_credentials_map(&credentials).await
     }
 
     pub async fn get_relay_host_credentials(&self, host_id: &str) -> Option<RelayHostCredentials> {

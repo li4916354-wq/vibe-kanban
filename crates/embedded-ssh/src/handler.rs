@@ -175,12 +175,8 @@ impl SshSessionHandler {
             let _ = handle.close(channel_id).await;
         });
 
-        self.channels.insert(
-            channel_id,
-            ChannelState::Active {
-                writer_tx,
-            },
-        );
+        self.channels
+            .insert(channel_id, ChannelState::Active { writer_tx });
 
         let _ = session.channel_success(channel_id);
         Ok(())

@@ -1,7 +1,7 @@
 use anyhow::{self, Error as AnyhowError};
 use axum::Router;
 use deployment::{Deployment, DeploymentError};
-use server::{DeploymentImpl, preview_proxy, routes, tunnel};
+use server::{DeploymentImpl, bridge, preview_proxy, routes, tunnel};
 use services::services::container::ContainerService;
 use sqlx::Error as SqlxError;
 use strip_ansi_escapes::strip;
@@ -26,6 +26,8 @@ pub enum VibeKanbanError {
     Other(#[from] AnyhowError),
 }
 
+const BRIDGE_PORT: u16 = 15147;
+
 #[tokio::main]
 async fn main() -> Result<(), VibeKanbanError> {
     // Install rustls crypto provider before any TLS operations
@@ -37,7 +39,7 @@ async fn main() -> Result<(), VibeKanbanError> {
 
     let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     let filter_string = format!(
-        "warn,server={level},services={level},db={level},executors={level},deployment={level},local_deployment={level},utils={level},embedded_ssh={level},codex_core=off",
+        "warn,server={level},services={level},db={level},executors={level},deployment={level},local_deployment={level},utils={level},embedded_ssh={level},desktop_bridge={level},codex_core=off",
         level = log_level
     );
     let env_filter = EnvFilter::try_new(filter_string).expect("Failed to create tracing filter");
@@ -108,6 +110,9 @@ async fn main() -> Result<(), VibeKanbanError> {
         .ok()
         .and_then(|s| s.trim().parse::<u16>().ok())
         .unwrap_or(0);
+    // NOTE: Bridge API intentionally stays on a fixed localhost port for browser discovery.
+    // TODO: Replace this localhost HTTP bridge path with Tauri IPC once desktop app integration lands.
+    let bridge_port = BRIDGE_PORT;
 
     let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
 
@@ -116,6 +121,17 @@ async fn main() -> Result<(), VibeKanbanError> {
 
     let proxy_listener = tokio::net::TcpListener::bind(format!("{host}:{proxy_port}")).await?;
     let actual_proxy_port = proxy_listener.local_addr()?.port();
+    let bridge_listener = match tokio::net::TcpListener::bind(("127.0.0.1", bridge_port)).await {
+        Ok(listener) => Some(listener),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            tracing::warn!(
+                port = bridge_port,
+                "Bridge port is already in use; bridge API listener disabled"
+            );
+            None
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     preview_proxy::set_proxy_port(actual_proxy_port);
 
@@ -126,9 +142,15 @@ async fn main() -> Result<(), VibeKanbanError> {
     let shutdown_token = CancellationToken::new();
 
     tracing::info!(
-        "Main server on :{}, Preview proxy on :{}",
+        "Main server on :{}, Preview proxy on :{}, Bridge API on 127.0.0.1:{}{}",
         actual_main_port,
-        actual_proxy_port
+        actual_proxy_port,
+        bridge_port,
+        if bridge_listener.is_some() {
+            ""
+        } else {
+            " (disabled)"
+        }
     );
 
     // Production only: open browser
@@ -149,14 +171,20 @@ async fn main() -> Result<(), VibeKanbanError> {
     }
 
     let proxy_router: Router = preview_proxy::router();
+    let bridge_router: Router = bridge::router();
 
     let main_shutdown = shutdown_token.clone();
     let proxy_shutdown = shutdown_token.clone();
+    let bridge_shutdown = shutdown_token.clone();
 
     let main_server = axum::serve(main_listener, app_router)
         .with_graceful_shutdown(async move { main_shutdown.cancelled().await });
     let proxy_server = axum::serve(proxy_listener, proxy_router)
         .with_graceful_shutdown(async move { proxy_shutdown.cancelled().await });
+    let bridge_server = bridge_listener.map(|listener| {
+        axum::serve(listener, bridge_router)
+            .with_graceful_shutdown(async move { bridge_shutdown.cancelled().await })
+    });
 
     let main_handle = tokio::spawn(async move {
         if let Err(e) = main_server.await {
@@ -167,6 +195,13 @@ async fn main() -> Result<(), VibeKanbanError> {
         if let Err(e) = proxy_server.await {
             tracing::error!("Preview proxy error: {}", e);
         }
+    });
+    let bridge_handle = bridge_server.map(|bridge_server| {
+        tokio::spawn(async move {
+            if let Err(e) = bridge_server.await {
+                tracing::error!("Bridge API server error: {}", e);
+            }
+        })
     });
 
     deployment.server_info().set_port(actual_main_port).await;
@@ -183,6 +218,13 @@ async fn main() -> Result<(), VibeKanbanError> {
         }
         _ = main_handle => {}
         _ = proxy_handle => {}
+        _ = async {
+            if let Some(handle) = bridge_handle {
+                let _ = handle.await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {}
     }
 
     shutdown_token.cancel();

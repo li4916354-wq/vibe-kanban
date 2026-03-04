@@ -21,6 +21,7 @@ worktree-manager = { path = "../worktree-manager" }
 workspace-manager = { path = "../workspace-manager" }
 embedded-ssh = { path = "../embedded-ssh" }
 relay-tunnel = { path = "../relay-tunnel" }
+desktop-bridge = { path = "../desktop-bridge" }
 trusted-key-auth = { path = "../trusted-key-auth" }
 tokio = { workspace = true }
 shlex = "1.3.0"

@@ -1,21 +1,7 @@
-const DEFAULT_BRIDGE_PORT = 15147;
-const BRIDGE_PORT_KEY = "vk-desktop-bridge-port";
-
-function getBridgePort(): number {
-  try {
-    const stored = localStorage.getItem(BRIDGE_PORT_KEY);
-    if (stored) {
-      const port = parseInt(stored, 10);
-      if (port > 0 && port < 65536) return port;
-    }
-  } catch {
-    // localStorage unavailable
-  }
-  return DEFAULT_BRIDGE_PORT;
-}
+const BRIDGE_PORT = 15147;
 
 function getBridgeUrl(): string {
-  return `http://127.0.0.1:${getBridgePort()}`;
+  return `http://127.0.0.1:${BRIDGE_PORT}`;
 }
 
 export interface OpenRemoteEditorRequest {

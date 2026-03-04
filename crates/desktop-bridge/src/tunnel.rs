@@ -8,8 +8,8 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::Context as _;
 use relay_tunnel::ws_io::tungstenite_ws_stream_io;
 use tokio::{net::TcpListener, sync::Mutex};
-use tokio_util::sync::CancellationToken;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_util::sync::CancellationToken;
 
 use crate::signing::SigningContext;
 

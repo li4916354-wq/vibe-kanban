@@ -10,6 +10,7 @@ use relay_tunnel::ws_io::tungstenite_ws_stream_io;
 use tokio::{net::TcpListener, sync::Mutex};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::signing::SigningContext;
 
@@ -21,7 +22,9 @@ struct TunnelKey {
 }
 
 struct ActiveTunnel {
+    id: Uuid,
     local_port: u16,
+    signing_session_id: String,
     cancel: CancellationToken,
 }
 
@@ -55,17 +58,30 @@ impl TunnelManager {
         signing_ctx: &SigningContext,
         api_path: &str,
     ) -> anyhow::Result<u16> {
+        let requested_signing_session_id = signing_ctx.signing_session_id.clone();
         let key = TunnelKey {
             relay_session_base_url: relay_session_base_url.to_string(),
             api_path: api_path.to_string(),
         };
 
-        // Check for existing healthy tunnel
+        // Check for existing healthy tunnel.
+        // If signing session rotated, replace the existing tunnel.
         {
-            let tunnels = self.tunnels.lock().await;
+            let mut tunnels = self.tunnels.lock().await;
             if let Some(tunnel) = tunnels.get(&key) {
                 if !tunnel.cancel.is_cancelled() {
-                    return Ok(tunnel.local_port);
+                    if tunnel.signing_session_id == requested_signing_session_id {
+                        return Ok(tunnel.local_port);
+                    }
+
+                    tracing::info!(
+                        previous_signing_session_id = %tunnel.signing_session_id,
+                        new_signing_session_id = %requested_signing_session_id,
+                        local_port = tunnel.local_port,
+                        "Replacing tunnel after signing session rotation"
+                    );
+                    tunnel.cancel.cancel();
+                    tunnels.remove(&key);
                 }
             }
         }
@@ -75,6 +91,7 @@ impl TunnelManager {
             .await
             .context("Failed to bind local tunnel listener")?;
         let local_port = listener.local_addr()?.port();
+        let tunnel_id = Uuid::new_v4();
 
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
@@ -82,6 +99,7 @@ impl TunnelManager {
         let signing_ctx = signing_ctx.clone();
         let tunnels = self.tunnels.clone();
         let key_clone = key.clone();
+        let tunnel_id_clone = tunnel_id;
         let api_path = api_path.to_string();
 
         tokio::spawn(async move {
@@ -94,14 +112,25 @@ impl TunnelManager {
             )
             .await;
 
-            // Clean up on exit
-            tunnels.lock().await.remove(&key_clone);
+            // Clean up on exit, but only if this task still owns the key.
+            let mut tunnels = tunnels.lock().await;
+            if tunnels
+                .get(&key_clone)
+                .is_some_and(|active| active.id == tunnel_id_clone)
+            {
+                tunnels.remove(&key_clone);
+            }
         });
 
-        self.tunnels
-            .lock()
-            .await
-            .insert(key, ActiveTunnel { local_port, cancel });
+        self.tunnels.lock().await.insert(
+            key,
+            ActiveTunnel {
+                id: tunnel_id,
+                local_port,
+                signing_session_id: requested_signing_session_id,
+                cancel,
+            },
+        );
 
         Ok(local_port)
     }

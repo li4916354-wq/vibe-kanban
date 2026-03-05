@@ -452,6 +452,7 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
                   onShiftCmdEnter={handleSubmitCreateOnly}
                   taskId={editMode ? props.task.id : undefined}
                   localImages={localImages}
+                  showStaticToolbar
                 />
               </div>
             )}

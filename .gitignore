@@ -26,6 +26,7 @@ bindings/
 # IDE
 .vscode/
 .idea/
+.omc/
 *.swp
 *.swo
 *~

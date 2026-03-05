@@ -10,7 +10,6 @@ import { remoteAccessApi, type RemoteAccessStatus } from '@/lib/remoteAccessApi'
 import {
   SettingsCard,
   SettingsCheckbox,
-  SettingsField,
   SettingsInput,
 } from './SettingsComponents';
 import { PrimaryButton } from '../../primitives/PrimaryButton';
@@ -401,7 +400,7 @@ export function RemoteAccessSection() {
                   }
                   onClick={handleToggleTunnel}
                   disabled={isEnablingTunnel}
-                  variant={remoteStatus.tunnel.status === 'running' ? 'tertiary' : 'primary'}
+                  variant={remoteStatus.tunnel.status === 'running' ? 'tertiary' : 'default'}
                   actionIcon={isEnablingTunnel ? 'spinner' : undefined}
                 />
               </div>
@@ -482,7 +481,7 @@ export function RemoteAccessSection() {
               value={t('settings.remoteAccess.totp.unbind')}
               onClick={handleUnbindTotp}
               variant="tertiary"
-              icon={Unlink}
+              actionIcon={Unlink}
             />
           </div>
         ) : showBindingFlow ? (
@@ -545,7 +544,7 @@ export function RemoteAccessSection() {
             <PrimaryButton
               value={t('settings.remoteAccess.totp.bind')}
               onClick={handleStartBinding}
-              icon={Link2}
+              actionIcon={Link2}
             />
           </div>
         )}

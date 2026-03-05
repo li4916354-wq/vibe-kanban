@@ -1,4 +1,4 @@
-import { useCallback, useState, useMemo } from 'react';
+import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -21,7 +21,7 @@ export function ProjectSwitcher() {
   );
 
   const handleCreateProject = useCallback(async () => {
-    const result = await ProjectFormDialog.show();
+    const result = await ProjectFormDialog.show({});
     if (result.status === 'saved') {
       navigate(`/projects/${result.project.id}/tasks`);
     }

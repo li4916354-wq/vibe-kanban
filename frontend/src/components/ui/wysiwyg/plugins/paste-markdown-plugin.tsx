@@ -14,6 +14,10 @@ import {
 
 type Props = {
   transformers: Transformer[];
+  /** Callback for handling pasted image files */
+  onPasteFiles?: (files: File[]) => void;
+  /** Whether the editor is disabled */
+  disabled?: boolean;
 };
 
 /**
@@ -23,8 +27,13 @@ type Props = {
  * - CMD+V with HTML: Let default Lexical handling work
  * - CMD+V with plain text: Convert markdown to formatted nodes, insert at cursor
  * - CMD+SHIFT+V: Insert plain text as-is (raw paste)
+ * - CMD+V with image files: Trigger onPasteFiles callback and prevent default
  */
-export function PasteMarkdownPlugin({ transformers }: Props) {
+export function PasteMarkdownPlugin({
+  transformers,
+  onPasteFiles,
+  disabled = false,
+}: Props) {
   const [editor] = useLexicalComposerContext();
   const shiftHeldRef = useRef(false);
 
@@ -53,6 +62,19 @@ export function PasteMarkdownPlugin({ transformers }: Props) {
 
         const clipboardData = event.clipboardData;
         if (!clipboardData) return false;
+
+        // Handle image file pasting first (before text/HTML processing)
+        if (onPasteFiles && !disabled) {
+          const files: File[] = Array.from(
+            clipboardData.files || []
+          ).filter((f) => f.type.startsWith('image/'));
+
+          if (files.length > 0) {
+            event.preventDefault();
+            onPasteFiles(files);
+            return true;
+          }
+        }
 
         // If HTML exists, let default Lexical handling work
         if (clipboardData.getData('text/html')) return false;
@@ -102,7 +124,7 @@ export function PasteMarkdownPlugin({ transformers }: Props) {
       rootElement.removeEventListener('keyup', handleKeyUp);
       unregisterPaste();
     };
-  }, [editor, transformers]);
+  }, [editor, transformers, onPasteFiles, disabled]);
 
   return null;
 }

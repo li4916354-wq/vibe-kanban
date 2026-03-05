@@ -199,25 +199,6 @@ function WYSIWYGEditor({
     []
   );
 
-  // Memoized handlers for ContentEditable to prevent re-renders
-  const handlePaste = useCallback(
-    (event: React.ClipboardEvent) => {
-      if (!onPasteFiles || disabled) return;
-
-      const dt = event.clipboardData;
-      if (!dt) return;
-
-      const files: File[] = Array.from(dt.files || []).filter((f) =>
-        f.type.startsWith('image/')
-      );
-
-      if (files.length > 0) {
-        onPasteFiles(files);
-      }
-    },
-    [onPasteFiles, disabled]
-  );
-
   // Memoized placeholder element
   const placeholderElement = useMemo(
     () => (
@@ -250,7 +231,6 @@ function WYSIWYGEditor({
                       aria-label={
                         disabled ? 'Markdown content' : 'Markdown editor'
                       }
-                      onPaste={handlePaste}
                     />
                   }
                   placeholder={placeholderElement}
@@ -267,7 +247,11 @@ function WYSIWYGEditor({
                   {autoFocus && <AutoFocusPlugin />}
                   <HistoryPlugin />
                   <MarkdownShortcutPlugin transformers={extendedTransformers} />
-                  <PasteMarkdownPlugin transformers={extendedTransformers} />
+                  <PasteMarkdownPlugin
+                    transformers={extendedTransformers}
+                    onPasteFiles={onPasteFiles}
+                    disabled={disabled}
+                  />
                   <TypeaheadOpenProvider>
                     <FileTagTypeaheadPlugin
                       workspaceId={workspaceId}

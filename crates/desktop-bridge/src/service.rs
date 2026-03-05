@@ -103,7 +103,12 @@ fn build_editor_url(alias: &str, workspace_path: &str, editor_type: Option<&str>
                 "GOOGLE_ANTIGRAVITY" => "antigravity",
                 _ => "vscode",
             };
-            format!("{scheme}://vscode-remote/ssh-remote+{alias}{workspace_path}")
+            let base = format!("{scheme}://vscode-remote/ssh-remote+{alias}{workspace_path}");
+            if matches!(scheme, "vscode" | "vscode-insiders") {
+                format!("{base}?windowId=_blank")
+            } else {
+                base
+            }
         }
     }
 }
@@ -115,7 +120,10 @@ mod tests {
     #[test]
     fn builds_vscode_url_by_default() {
         let url = build_editor_url("vk-abc", "/tmp/ws", None);
-        assert_eq!(url, "vscode://vscode-remote/ssh-remote+vk-abc/tmp/ws");
+        assert_eq!(
+            url,
+            "vscode://vscode-remote/ssh-remote+vk-abc/tmp/ws?windowId=_blank"
+        );
     }
 
     #[test]

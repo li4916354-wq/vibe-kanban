@@ -7,6 +7,7 @@ use tower_http::validate_request::ValidateRequestHeaderLayer;
 use crate::{DeploymentImpl, middleware};
 
 pub mod approvals;
+pub mod chat_sessions;
 pub mod config;
 pub mod containers;
 pub mod filesystem;
@@ -47,6 +48,7 @@ pub fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(approvals::router())
         .merge(scratch::router(&deployment))
         .merge(sessions::router(&deployment))
+        .merge(chat_sessions::router(&deployment))
         .merge(terminal::router())
         .merge(remote::router())
         .nest("/images", images::routes())

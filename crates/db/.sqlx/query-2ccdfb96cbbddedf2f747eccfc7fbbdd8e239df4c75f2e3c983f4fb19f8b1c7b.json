@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                cs.id AS \"id!: Uuid\",\n                cs.project_id AS \"project_id!: Uuid\",\n                cs.title,\n                cs.pinned AS \"pinned!: bool\",\n                cs.executor,\n                cs.created_at AS \"created_at!: DateTime<Utc>\",\n                cs.updated_at AS \"updated_at!: DateTime<Utc>\",\n                CASE WHEN EXISTS (\n                    SELECT 1 FROM chat_execution_processes cep\n                    WHERE cep.chat_session_id = cs.id AND cep.status = 'running'\n                    LIMIT 1\n                ) THEN 1 ELSE 0 END AS \"is_running!: i64\",\n                (\n                    SELECT CAST((julianday('now') - julianday(cep.started_at)) * 86400 AS INTEGER)\n                    FROM chat_execution_processes cep\n                    WHERE cep.chat_session_id = cs.id AND cep.status = 'running'\n                    ORDER BY cep.started_at DESC\n                    LIMIT 1\n                ) AS \"elapsed_seconds: i64\"\n            FROM chat_sessions cs\n            WHERE cs.project_id = $1\n            ORDER BY cs.pinned DESC, cs.updated_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: Uuid",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "project_id!: Uuid",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "pinned!: bool",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "executor",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at!: DateTime<Utc>",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at!: DateTime<Utc>",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_running!: i64",
+        "ordinal": 7,
+        "type_info": "Null"
+      },
+      {
+        "name": "elapsed_seconds: i64",
+        "ordinal": 8,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "2ccdfb96cbbddedf2f747eccfc7fbbdd8e239df4c75f2e3c983f4fb19f8b1c7b"
+}

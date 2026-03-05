@@ -41,6 +41,7 @@ import { OAuthDialog } from '@/components/dialogs/global/OAuthDialog';
 import { useUserSystem } from '@/components/ConfigProvider';
 import { oauthApi } from '@/lib/api';
 import { ProjectSwitcher } from '@/components/layout/ProjectSwitcher';
+import { ProjectTabSwitcher } from '@/components/layout/ProjectTabSwitcher';
 
 const INTERNAL_NAV = [{ label: 'Projects', icon: FolderOpen, to: '/projects' }];
 
@@ -146,8 +147,11 @@ export function Navbar() {
             <Link to="/projects">
               <Logo />
             </Link>
-            {isTasksRoute ? (
-              <ProjectSwitcher />
+            {projectId ? (
+              <>
+                <ProjectSwitcher />
+                <ProjectTabSwitcher />
+              </>
             ) : (
               <a
                 href="https://discord.gg/AC4nwVtJM3"

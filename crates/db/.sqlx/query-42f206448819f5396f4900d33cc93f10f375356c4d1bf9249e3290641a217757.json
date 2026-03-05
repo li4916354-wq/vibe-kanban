@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE chat_sessions SET updated_at = datetime('now', 'subsec') WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "42f206448819f5396f4900d33cc93f10f375356c4d1bf9249e3290641a217757"
+}

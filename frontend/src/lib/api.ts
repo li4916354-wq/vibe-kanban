@@ -1357,3 +1357,65 @@ export const queueApi = {
     return handleApiResponse<QueueStatus>(response);
   },
 };
+
+// Chat session types (defined locally until types are generated)
+export interface ChatSession {
+  id: string;
+  project_id: string;
+  title: string | null;
+  pinned: boolean;
+  executor: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatSessionWithStatus {
+  chat_session: ChatSession;
+  is_running: boolean;
+  elapsed_seconds: number | null;
+}
+
+// Chat Sessions API (project-level chat without worktrees)
+export const chatSessionsApi = {
+  list: async (projectId: string): Promise<ChatSessionWithStatus[]> => {
+    const response = await makeRequest(
+      `/api/chat-sessions?project_id=${projectId}`
+    );
+    return handleApiResponse<ChatSessionWithStatus[]>(response);
+  },
+
+  get: async (sessionId: string): Promise<ChatSessionWithStatus> => {
+    const response = await makeRequest(`/api/chat-sessions/${sessionId}`);
+    return handleApiResponse<ChatSessionWithStatus>(response);
+  },
+
+  create: async (data: {
+    project_id: string;
+    title?: string;
+    executor?: string;
+  }): Promise<ChatSessionWithStatus> => {
+    const response = await makeRequest('/api/chat-sessions', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return handleApiResponse<ChatSessionWithStatus>(response);
+  },
+
+  update: async (
+    sessionId: string,
+    data: { title?: string; pinned?: boolean }
+  ): Promise<ChatSessionWithStatus> => {
+    const response = await makeRequest(`/api/chat-sessions/${sessionId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+    return handleApiResponse<ChatSessionWithStatus>(response);
+  },
+
+  delete: async (sessionId: string): Promise<void> => {
+    const response = await makeRequest(`/api/chat-sessions/${sessionId}`, {
+      method: 'DELETE',
+    });
+    return handleApiResponse<void>(response);
+  },
+};

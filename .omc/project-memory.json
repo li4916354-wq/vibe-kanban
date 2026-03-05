@@ -1,0 +1,289 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1772731941376,
+  "projectRoot": "/private/var/folders/6n/c5dpft4s5t7_s634mjjyn20w0000gn/T/vibe-kanban/worktrees/2e36-/vibe-kanban",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": ">=18",
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "Rust",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "Cargo.toml"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "vite",
+        "version": "6.3.5",
+        "category": "build"
+      },
+      {
+        "name": "axum",
+        "version": null,
+        "category": "backend"
+      }
+    ],
+    "packageManager": "pnpm",
+    "runtime": "Node.js 18"
+  },
+  "build": {
+    "buildCommand": "cargo build",
+    "testCommand": "cargo test",
+    "lintCommand": "pnpm lint",
+    "devCommand": "pnpm dev",
+    "scripts": {
+      "lint": "pnpm run frontend:lint && pnpm run backend:lint",
+      "format": "cargo fmt --all && cd frontend && pnpm run format",
+      "check": "pnpm run frontend:check && pnpm run backend:check",
+      "dev": "export FRONTEND_PORT=$(node scripts/setup-dev-environment.js frontend) && export BACKEND_PORT=$(node scripts/setup-dev-environment.js backend) && export VK_ALLOWED_ORIGINS=\"http://localhost:${FRONTEND_PORT}\" && export VITE_VK_SHARED_API_BASE=${VK_SHARED_API_BASE:-} && concurrently \"pnpm run backend:dev:watch\" \"pnpm run frontend:dev\"",
+      "dev:win": "node scripts/dev-windows.js",
+      "test:npm": "./test-npm-package.sh",
+      "frontend:lint": "cd frontend && pnpm run lint",
+      "frontend:dev": "cd frontend && pnpm run dev -- --port ${FRONTEND_PORT:-3000} --host",
+      "frontend:check": "cd frontend && pnpm run check",
+      "backend:lint": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "backend:dev": "BACKEND_PORT=$(node scripts/setup-dev-environment.js backend) pnpm run backend:dev:watch",
+      "backend:check": "cargo check",
+      "backend:dev:watch": "DISABLE_WORKTREE_CLEANUP=1 RUST_LOG=debug cargo watch -w crates -x 'run --bin server'",
+      "dev:qa": "export FRONTEND_PORT=$(node scripts/setup-dev-environment.js frontend) && export BACKEND_PORT=$(node scripts/setup-dev-environment.js backend) && export VK_ALLOWED_ORIGINS=\"http://localhost:${FRONTEND_PORT}\" && export VITE_VK_SHARED_API_BASE=${VK_SHARED_API_BASE:-} && concurrently \"pnpm run backend:dev:watch:qa\" \"pnpm run frontend:dev\"",
+      "generate-types": "cargo run --bin generate_types",
+      "generate-types:check": "cargo run --bin generate_types -- --check",
+      "remote:generate-types": "cargo run -p remote --bin remote-generate-types",
+      "remote:generate-types:check": "cargo run -p remote --bin remote-generate-types -- --check",
+      "prepare-db": "node scripts/prepare-db.js",
+      "prepare-db:check": "node scripts/prepare-db.js --check",
+      "build:npx": "bash ./local-build.sh",
+      "prepack": "pnpm run build:npx",
+      "remote:dev": "cd crates/remote && docker compose --env-file .env.remote up --build ; docker compose down -v",
+      "remote:dev:clean": "cd crates/remote && docker compose --env-file .env.remote down -v",
+      "remote:prepare-db": "cd crates/remote && bash scripts/prepare-db.sh",
+      "remote:prepare-db:check": "cd crates/remote && bash scripts/prepare-db.sh --check"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": true,
+    "workspaces": [],
+    "mainDirectories": [
+      "assets",
+      "docs",
+      "scripts"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "assets": {
+      "path": "assets",
+      "purpose": "Static assets",
+      "fileCount": 0,
+      "lastAccessed": 1772731940940,
+      "keyFiles": []
+    },
+    "crates": {
+      "path": "crates",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1772731940942,
+      "keyFiles": []
+    },
+    "dev_assets_seed": {
+      "path": "dev_assets_seed",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1772731941206,
+      "keyFiles": [
+        "config.json",
+        "db.sqlite",
+        "dev.db"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 8,
+      "lastAccessed": 1772731941217,
+      "keyFiles": [
+        "AGENTS.md",
+        "README.md",
+        "docs.json",
+        "getting-started.mdx",
+        "index.mdx"
+      ]
+    },
+    "frontend": {
+      "path": "frontend",
+      "purpose": null,
+      "fileCount": 13,
+      "lastAccessed": 1772731941218,
+      "keyFiles": [
+        "CLAUDE.md",
+        "components.json",
+        "components.legacy.json",
+        "index.html",
+        "package.json"
+      ]
+    },
+    "npx-cli": {
+      "path": "npx-cli",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1772731941221,
+      "keyFiles": [
+        "README.md",
+        "package.json"
+      ]
+    },
+    "remote-frontend": {
+      "path": "remote-frontend",
+      "purpose": null,
+      "fileCount": 8,
+      "lastAccessed": 1772731941223,
+      "keyFiles": [
+        "index.html",
+        "package.json",
+        "postcss.config.js",
+        "tailwind.config.js",
+        "tsconfig.json"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 6,
+      "lastAccessed": 1772731941224,
+      "keyFiles": [
+        "check-i18n.sh",
+        "clang",
+        "dev-windows.js",
+        "prepare-db.js",
+        "ring-cc-wrapper.sh"
+      ]
+    },
+    "shared": {
+      "path": "shared",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1772731941225,
+      "keyFiles": [
+        "remote-types.ts",
+        "types.ts"
+      ]
+    },
+    "assets/scripts": {
+      "path": "assets/scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 1,
+      "lastAccessed": 1772731941226,
+      "keyFiles": [
+        "toast-notification.ps1"
+      ]
+    },
+    "crates/services": {
+      "path": "crates/services",
+      "purpose": "Business logic services",
+      "fileCount": 1,
+      "lastAccessed": 1772731941331,
+      "keyFiles": [
+        "Cargo.toml"
+      ]
+    },
+    "crates/utils": {
+      "path": "crates/utils",
+      "purpose": "Utility functions",
+      "fileCount": 1,
+      "lastAccessed": 1772731941345,
+      "keyFiles": [
+        "Cargo.toml"
+      ]
+    },
+    "frontend/node_modules": {
+      "path": "frontend/node_modules",
+      "purpose": "Dependencies",
+      "fileCount": 0,
+      "lastAccessed": 1772731941356,
+      "keyFiles": []
+    },
+    "frontend/public": {
+      "path": "frontend/public",
+      "purpose": "Public files",
+      "fileCount": 8,
+      "lastAccessed": 1772731941357,
+      "keyFiles": [
+        "beta-workspaces-preview.png",
+        "favicon-vk-dark.svg",
+        "favicon-vk-light-maskable.svg"
+      ]
+    },
+    "npx-cli/bin": {
+      "path": "npx-cli/bin",
+      "purpose": "Executable scripts",
+      "fileCount": 2,
+      "lastAccessed": 1772731941359,
+      "keyFiles": [
+        "cli.js",
+        "download.js"
+      ]
+    },
+    "remote-frontend/node_modules": {
+      "path": "remote-frontend/node_modules",
+      "purpose": "Dependencies",
+      "fileCount": 0,
+      "lastAccessed": 1772731941365,
+      "keyFiles": []
+    },
+    "remote-frontend/public": {
+      "path": "remote-frontend/public",
+      "purpose": "Public files",
+      "fileCount": 4,
+      "lastAccessed": 1772731941371,
+      "keyFiles": [
+        "favicon.png",
+        "logo_light.png",
+        "review_fast_logo_dark.svg"
+      ]
+    },
+    "remote-frontend/src": {
+      "path": "remote-frontend/src",
+      "purpose": "Source code",
+      "fileCount": 8,
+      "lastAccessed": 1772731941373,
+      "keyFiles": [
+        "App.tsx",
+        "AppRouter.tsx",
+        "api.ts"
+      ]
+    },
+    "shared/schemas": {
+      "path": "shared/schemas",
+      "purpose": "Schema definitions",
+      "fileCount": 9,
+      "lastAccessed": 1772731941376,
+      "keyFiles": [
+        "amp.json",
+        "claude_code.json",
+        "codex.json"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE chat_sessions SET title = $1, updated_at = datetime('now', 'subsec') WHERE id = $2 AND title IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ccff1ac0e058cf58d40e9485ba0289fe15952892bb516d30200b41c91e3b5100"
+}

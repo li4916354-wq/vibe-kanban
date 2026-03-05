@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE chat_sessions SET\n                title = CASE WHEN $1 THEN $2 ELSE title END,\n                pinned = COALESCE($3, pinned),\n                updated_at = datetime('now', 'subsec')\n            WHERE id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "836f722efde73cd5e7a72735bd1da5f11edbd515bc1bf1c76205d64668c5770d"
+}

@@ -272,6 +272,58 @@
         }
       }
     },
+    "remoteAccess": {
+      "title": "远程访问",
+      "description": "允许从其他设备访问此应用程序。",
+      "securityWarning": {
+        "title": "安全警告",
+        "description": "启用远程访问后，任何拥有密码的人都可以完全控制您的计算机（读写文件、执行命令）。请勿与不信任的人分享访问密码。"
+      },
+      "enable": {
+        "label": "启用远程访问",
+        "helper": "允许从其他设备访问应用程序"
+      },
+      "localAddress": "本地地址",
+      "lanAddress": "局域网地址",
+      "connectedDevices": "已连接设备",
+      "deviceCount": "{{count}} 台设备",
+      "password": {
+        "label": "访问密码",
+        "placeholder": "4-32 个字符",
+        "tooShort": "密码太短",
+        "saveFailed": "设置密码失败"
+      },
+      "tunnel": {
+        "title": "互联网访问",
+        "description": "通过 Cloudflare 获取公网地址（启动后约等待 10 秒进行 DNS 解析）",
+        "start": "启动隧道",
+        "stop": "停止隧道",
+        "connecting": "连接中...",
+        "publicAddress": "公网地址",
+        "error": "隧道连接失败"
+      },
+      "qrCode": {
+        "title": "扫码访问",
+        "description": "使用手机扫描二维码即可访问"
+      },
+      "totp": {
+        "title": "Google Authenticator",
+        "description": "使用 Google Authenticator 进行双重身份验证，提高安全性。只支持绑定一个设备。",
+        "bound": "已绑定设备",
+        "boundDescription": "您的账户已绑定 Google Authenticator",
+        "notBound": "未绑定设备",
+        "notBoundDescription": "绑定 Google Authenticator 以增强远程访问安全性",
+        "bind": "绑定设备",
+        "unbind": "解除绑定",
+        "scanInstructions": "使用 Google Authenticator 应用扫描下方二维码，然后输入 6 位验证码完成绑定",
+        "codePlaceholder": "输入 6 位验证码",
+        "verify": "验证并绑定",
+        "verifying": "验证中...",
+        "generateFailed": "生成二维码失败",
+        "bindFailed": "绑定失败",
+        "invalidCode": "验证码必须是 6 位数字"
+      }
+    },
     "agents": {
       "title": "编码代理配置",
       "description": "使用不同的配置自定义编码代理的行为。",

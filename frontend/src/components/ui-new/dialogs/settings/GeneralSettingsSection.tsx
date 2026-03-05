@@ -43,6 +43,7 @@ import {
   SettingsTextarea,
 } from './SettingsComponents';
 import { useSettingsDirty } from './SettingsDirtyContext';
+import { RemoteAccessSection } from './RemoteAccessSection';
 
 export function GeneralSettingsSection() {
   const { t } = useTranslation(['settings', 'common']);
@@ -765,6 +766,9 @@ export function GeneralSettingsSection() {
           onChange={(checked) => updateDraft({ commit_reminder: checked })}
         />
       </SettingsCard>
+
+      {/* Remote Access */}
+      <RemoteAccessSection />
 
       <SettingsSaveBar
         show={hasUnsavedChanges}

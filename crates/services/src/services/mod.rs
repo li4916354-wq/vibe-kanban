@@ -18,6 +18,7 @@ pub mod project;
 #[cfg(feature = "qa-mode")]
 pub mod qa_repos;
 pub mod queued_message;
+pub mod remote_access;
 pub mod remote_client;
 pub mod repo;
 pub mod workspace_manager;

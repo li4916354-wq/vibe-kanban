@@ -18,6 +18,7 @@ use services::services::{
     oauth_credentials::OAuthCredentials,
     project::ProjectService,
     queued_message::QueuedMessageService,
+    remote_access::RemoteAccessService,
     remote_client::{RemoteClient, RemoteClientError},
     repo::RepoService,
     worktree_manager::WorktreeManager,
@@ -56,6 +57,7 @@ pub struct LocalDeployment {
     auth_context: AuthContext,
     oauth_handoffs: Arc<RwLock<HashMap<Uuid, PendingHandoff>>>,
     pty: PtyService,
+    remote_access: RemoteAccessService,
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +190,8 @@ impl Deployment for LocalDeployment {
 
         let pty = PtyService::new();
 
+        let remote_access = RemoteAccessService::new();
+
         let deployment = Self {
             config,
             user_id,
@@ -207,6 +211,7 @@ impl Deployment for LocalDeployment {
             auth_context,
             oauth_handoffs,
             pty,
+            remote_access,
         };
 
         Ok(deployment)
@@ -274,6 +279,10 @@ impl Deployment for LocalDeployment {
 }
 
 impl LocalDeployment {
+    pub fn remote_access(&self) -> &RemoteAccessService {
+        &self.remote_access
+    }
+
     pub fn remote_client(&self) -> Result<RemoteClient, RemoteClientNotConfigured> {
         self.remote_client.clone()
     }

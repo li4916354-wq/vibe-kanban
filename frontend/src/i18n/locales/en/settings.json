@@ -272,6 +272,58 @@
         }
       }
     },
+    "remoteAccess": {
+      "title": "Remote Access",
+      "description": "Allow access to this application from other devices.",
+      "securityWarning": {
+        "title": "Security Warning",
+        "description": "After enabling remote access, anyone with the password can fully control your computer (read/write files, execute commands). Do not share the access password with untrusted people."
+      },
+      "enable": {
+        "label": "Enable Remote Access",
+        "helper": "Allow access to the application from other devices"
+      },
+      "localAddress": "Local Address",
+      "lanAddress": "LAN Address",
+      "connectedDevices": "Connected Devices",
+      "deviceCount": "{{count}} device(s)",
+      "password": {
+        "label": "Access Password",
+        "placeholder": "4-32 characters",
+        "tooShort": "Password too short",
+        "saveFailed": "Failed to set password"
+      },
+      "tunnel": {
+        "title": "Internet Access",
+        "description": "Get a public address via Cloudflare (wait about 10 seconds for DNS resolution after startup)",
+        "start": "Start Tunnel",
+        "stop": "Stop Tunnel",
+        "connecting": "Connecting...",
+        "publicAddress": "Public Address",
+        "error": "Tunnel connection failed"
+      },
+      "qrCode": {
+        "title": "Scan to Access",
+        "description": "Scan the QR code with your phone to access"
+      },
+      "totp": {
+        "title": "Google Authenticator",
+        "description": "Use Google Authenticator for two-factor authentication to enhance security. Only one device can be bound.",
+        "bound": "Device Bound",
+        "boundDescription": "Your account is bound to Google Authenticator",
+        "notBound": "No Device Bound",
+        "notBoundDescription": "Bind Google Authenticator to enhance remote access security",
+        "bind": "Bind Device",
+        "unbind": "Unbind",
+        "scanInstructions": "Scan the QR code below with Google Authenticator app, then enter the 6-digit code to complete binding",
+        "codePlaceholder": "Enter 6-digit code",
+        "verify": "Verify and Bind",
+        "verifying": "Verifying...",
+        "generateFailed": "Failed to generate QR code",
+        "bindFailed": "Binding failed",
+        "invalidCode": "Code must be 6 digits"
+      }
+    },
     "agents": {
       "title": "Coding Agent Configurations",
       "description": "Customize the behavior of coding agents with different configurations.",

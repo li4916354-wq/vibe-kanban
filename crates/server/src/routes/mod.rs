@@ -19,6 +19,7 @@ pub mod images;
 pub mod oauth;
 pub mod organizations;
 pub mod projects;
+pub mod remote;
 pub mod repo;
 pub mod scratch;
 pub mod sessions;
@@ -47,6 +48,7 @@ pub fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(scratch::router(&deployment))
         .merge(sessions::router(&deployment))
         .merge(terminal::router())
+        .merge(remote::router())
         .nest("/images", images::routes())
         .layer(ValidateRequestHeaderLayer::custom(
             middleware::validate_origin,
